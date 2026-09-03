@@ -10,7 +10,7 @@ Resilient is a reproducibility-first research codebase built on [FastWAM](https:
 - The baseline target is `libero_uncond_2cam224.pt` with its released dataset statistics.
 - Reproduction uses the original checkpoint setting `EVALUATION.sigma_shift=5.0`.
 - FastWAM core behavior is unchanged. Project-specific code lives under `src/resilient/` and `scripts/resilient/`.
-- The standalone Python/CUDA stack, all pinned assets, a headless LIBERO EGL reset, and the one-episode integration evaluation are validated on the hardware below. The full benchmark is pending.
+- The standalone Python/CUDA stack, all pinned assets, a headless LIBERO EGL reset, the one-episode integration evaluation, and the full 2,000-episode benchmark are validated on the hardware below.
 
 ## Repository layout
 
@@ -40,14 +40,14 @@ Resilient/
 | OS | Linux x86_64 | Linux 5.4, x86_64 |
 | Python | CPython 3.10.20 | uv-managed standalone CPython 3.10.20 |
 | Environment tool | uv 0.11.7 | uv 0.11.7 |
-| GPU | NVIDIA GPU with BF16 support; 1 GPU for minimal evaluation | 8 × RTX 6000 Ada, 48 GB each |
+| GPU | NVIDIA GPU with BF16 support; at least 32 GB per worker recommended; 1 GPU works and 8 GPUs reproduce the parallel run | 8 × RTX 6000 Ada, 48 GB each; 24,728–25,593 MiB observed per worker |
 | NVIDIA driver | Compatible with CUDA 12.8 PyTorch wheels | 570.133.07 |
-| System memory | To be confirmed by full evaluation | 503 GiB |
+| System memory | At least 128 GiB recommended for 8 workers; reduce the worker count on smaller hosts | 503 GiB; about 90 GiB used in a running snapshot |
 | Disk | At least 80 GB for environment, weights, Git LFS objects, dataset, and outputs | 695 GB free before setup |
 
 Git LFS is required for the pinned Wan component download; version 3.6.1 was validated here.
 
-FastWAM defaults to eight persistent LIBERO workers. Set `MULTIRUN.num_gpus` to the number of available GPUs for full evaluation.
+FastWAM defaults to eight persistent LIBERO workers. Set `MULTIRUN.num_gpus` to the number of available GPUs for full evaluation. The validated eight-GPU run took approximately 46 minutes including worker startup and model loading; fewer GPUs reduce memory requirements but increase wall time.
 
 ## Environment setup
 
@@ -181,6 +181,20 @@ NUM_GPUS=8 bash reproduce/fastwam_libero/evaluate_full.sh
 ```
 
 Raw videos, worker logs, and per-task outputs remain under `evaluate_results/` and are ignored. Curated metrics and provenance are copied to `reports/baselines/` after validation.
+
+### Validated full result
+
+On 2026-09-04, all 40 tasks and 2,000 episodes completed with an empty failure queue. Independent validation confirmed 40 unique result files, 50 episodes for every task, complete success/failure episode partitions, and 2,000 non-empty rollout videos. The reproduced overall success rate is **97.15%** (1,943/2,000), 0.45 percentage points below the 97.6% reported in [Fast-WAM arXiv v2, Table 2](https://arxiv.org/html/2603.16666).
+
+| Suite | Reproduced | Successes | Published | Difference |
+| --- | ---: | ---: | ---: | ---: |
+| LIBERO-Spatial | 97.0% | 485/500 | 98.2% | -1.2 pp |
+| LIBERO-Object | 99.8% | 499/500 | 100.0% | -0.2 pp |
+| LIBERO-Goal | 96.6% | 483/500 | 97.0% | -0.4 pp |
+| LIBERO-Long (`libero_10`) | 95.2% | 476/500 | 95.2% | 0.0 pp |
+| **Average** | **97.15%** | **1,943/2,000** | **97.6%** | **-0.45 pp** |
+
+The run used seed 42, 10 inference steps, sigma shift 5.0, CFG 1.0, action compilation, MuJoCo 3.3.2, EGL rendering, and eight persistent workers. Approximate wall time was 46 minutes; summed task runtime was 19,253.27 seconds because tasks ran in parallel. See `reports/baselines/fastwam-libero-full.json` for the machine-readable record and exact provenance.
 
 ### Validated minimal result
 

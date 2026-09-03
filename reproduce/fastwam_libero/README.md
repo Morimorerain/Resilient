@@ -9,3 +9,7 @@ This recipe evaluates the released unconditional FastWAM checkpoint with the ups
 5. Promote only compact metrics and provenance into `reports/baselines/`.
 
 Do not commit raw rollout videos, worker logs, checkpoints, or simulator assets.
+
+## Validated result
+
+The 2026-09-04 reference run completed all 40 tasks and 2,000 episodes with 1,943 successes (97.15%). It used eight RTX 6000 Ada GPUs, seed 42, 10 inference steps, sigma shift 5.0, CFG 1.0, and the exact assets pinned in `manifests/assets.json`. The failure queue was empty, and independent aggregation matched the upstream summary. See `reports/baselines/fastwam-libero-full.json` for suite metrics and provenance.

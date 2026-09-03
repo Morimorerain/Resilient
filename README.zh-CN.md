@@ -10,7 +10,7 @@ Resilient 是一个以可复现性为首要目标、基于 [FastWAM](https://git
 - 基线目标为 `libero_uncond_2cam224.pt` 及其配套数据统计文件。
 - 原始 checkpoint 使用 `EVALUATION.sigma_shift=5.0` 复现。
 - FastWAM 核心默认行为未被修改；项目扩展放在 `src/resilient/` 和 `scripts/resilient/`。
-- 已在下方硬件上验证独立 Python/CUDA 环境、全部固定资产、LIBERO EGL 无界面 reset 与单回合集成评测；完整评测尚待执行。
+- 已在下方硬件上验证独立 Python/CUDA 环境、全部固定资产、LIBERO EGL 无界面 reset、单回合集成评测与完整 2,000 回合基准。
 
 ## 仓库结构
 
@@ -40,14 +40,14 @@ Resilient/
 | 系统 | Linux x86_64 | Linux 5.4，x86_64 |
 | Python | CPython 3.10.20 | uv 管理的独立 CPython 3.10.20 |
 | 环境工具 | uv 0.11.7 | uv 0.11.7 |
-| GPU | 支持 BF16 的 NVIDIA GPU；最小评测使用 1 张 | 8 × RTX 6000 Ada，每张 48 GB |
+| GPU | 支持 BF16 的 NVIDIA GPU；建议每个 worker 至少 32 GB；1 张可运行，8 张复现本次并行评测 | 8 × RTX 6000 Ada，每张 48 GB；每个 worker 实测 24,728–25,593 MiB |
 | NVIDIA 驱动 | 兼容 CUDA 12.8 PyTorch wheel | 570.133.07 |
-| 系统内存 | 待完整评测确认 | 503 GiB |
+| 系统内存 | 8 个 worker 建议至少 128 GiB；内存较小时减少 worker 数 | 503 GiB；运行中一次快照约使用 90 GiB |
 | 磁盘 | 环境、权重、Git LFS 对象、数据与输出合计至少 80 GB | 配置前可用约 695 GB |
 
 固定版本下载 Wan 公共组件需要 Git LFS；本次验证版本为 3.6.1。
 
-FastWAM 默认启动 8 个持久化 LIBERO worker。完整评测时可通过 `MULTIRUN.num_gpus` 或下方脚本的 `NUM_GPUS` 调整 GPU 数量。
+FastWAM 默认启动 8 个持久化 LIBERO worker。完整评测时可通过 `MULTIRUN.num_gpus` 或下方脚本的 `NUM_GPUS` 调整 GPU 数量。本次 8-GPU 验证运行包含 worker 启动和模型加载约用时 46 分钟；减少 GPU 可降低内存需求，但会增加总耗时。
 
 ## 环境安装
 
@@ -181,6 +181,20 @@ NUM_GPUS=8 bash reproduce/fastwam_libero/evaluate_full.sh
 ```
 
 原始视频、worker 日志和逐任务输出保留在 `evaluate_results/` 下并被 Git 忽略。验证完成后，只将精简指标和来源信息复制到 `reports/baselines/`。
+
+### 已验证的完整结果
+
+2026-09-04 完成全部 40 个任务、2,000 个 episode，失败队列为空。独立校验确认：40 个结果文件互不重复、每任务均为 50 回合、成功/失败 episode 划分完整，且 2,000 个回放视频均非空。本次复现总成功率为 **97.15%**（1,943/2,000），比 [Fast-WAM arXiv v2 表 2](https://arxiv.org/html/2603.16666) 报告的 97.6% 低 0.45 个百分点。
+
+| 套件 | 本次复现 | 成功数 | 论文结果 | 差异 |
+| --- | ---: | ---: | ---: | ---: |
+| LIBERO-Spatial | 97.0% | 485/500 | 98.2% | -1.2 个百分点 |
+| LIBERO-Object | 99.8% | 499/500 | 100.0% | -0.2 个百分点 |
+| LIBERO-Goal | 96.6% | 483/500 | 97.0% | -0.4 个百分点 |
+| LIBERO-Long（`libero_10`） | 95.2% | 476/500 | 95.2% | 0.0 个百分点 |
+| **平均** | **97.15%** | **1,943/2,000** | **97.6%** | **-0.45 个百分点** |
+
+本次使用 seed 42、10 个推理步、sigma shift 5.0、CFG 1.0、动作编译、MuJoCo 3.3.2、EGL 渲染和 8 个持久 worker。并行运行墙钟时间约 46 分钟；各任务耗时之和为 19,253.27 秒。机器可读记录和完整来源信息见 `reports/baselines/fastwam-libero-full.json`。
 
 ### 已验证的最小结果
 
