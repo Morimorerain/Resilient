@@ -52,6 +52,7 @@ onelogger.log
 # Downloaded assets and common large binary formats.
 assets/
 downloads/
+/third_party/LIBERO/
 apex/
 CLIP/
 *.jit

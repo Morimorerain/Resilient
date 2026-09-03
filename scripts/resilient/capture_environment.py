@@ -25,6 +25,12 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
 
+    package_snapshot = run(
+        ["uv", "pip", "freeze", "--python", sys.executable, "--exclude-editable"]
+    )
+    if package_snapshot is None:
+        package_snapshot = run([sys.executable, "-m", "pip", "freeze", "--exclude-editable"])
+
     metadata = {
         "python": sys.version,
         "platform": platform.platform(),
@@ -36,7 +42,7 @@ def main() -> int:
                 "--format=csv,noheader",
             ]
         ),
-        "pip_freeze": run([sys.executable, "-m", "pip", "freeze"]),
+        "package_snapshot": package_snapshot,
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")

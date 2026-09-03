@@ -42,6 +42,18 @@ dependencies = [
   "wandb==0.23.1",
 ]
 
+[project.optional-dependencies]
+libero = [
+  "bddl==1.0.1",
+  "cloudpickle==2.1.0",
+  "easydict==1.9",
+  "future==0.18.2",
+  "gym==0.25.2",
+  "matplotlib==3.10.8",
+  "opencv-python==4.12.0.88",
+  "robosuite==1.4.0",
+]
+
 [project.scripts]
 resilient = "resilient.__main__:main"
 
@@ -64,6 +76,7 @@ line-length = 100
 select = ["E", "F", "I", "UP"]
 
 [tool.pytest.ini_options]
+testpaths = ["tests"]
 markers = [
   "gpu: requires an NVIDIA GPU and the full FastWAM environment",
   "libero: requires the LIBERO simulator and assets",

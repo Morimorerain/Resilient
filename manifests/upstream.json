@@ -6,7 +6,8 @@
   },
   "libero": {
     "repository": "https://github.com/Lifelong-Robot-Learning/LIBERO.git",
-    "commit": null,
-    "note": "Populate after compatibility validation with MuJoCo 3.3.2."
+    "commit": "8f1084e3132a39270c3a13ebe37270a43ece2a01",
+    "license": "MIT",
+    "note": "Install simulator-only dependencies from requirements-libero.txt; do not install LIBERO's historical full requirements file."
   }
 }
