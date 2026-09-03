@@ -10,7 +10,7 @@ Resilient is a reproducibility-first research codebase built on [FastWAM](https:
 - The baseline target is `libero_uncond_2cam224.pt` with its released dataset statistics.
 - Reproduction uses the original checkpoint setting `EVALUATION.sigma_shift=5.0`.
 - FastWAM core behavior is unchanged. Project-specific code lives under `src/resilient/` and `scripts/resilient/`.
-- The standalone Python/CUDA stack and a headless LIBERO EGL reset are validated on the hardware below. Asset transfer and benchmark execution are in progress.
+- The standalone Python/CUDA stack, all pinned assets, a headless LIBERO EGL reset, and the one-episode integration evaluation are validated on the hardware below. The full benchmark is pending.
 
 ## Repository layout
 
@@ -153,7 +153,7 @@ data/lerobot_v30/libero_object_no_noops_lerobot/
 data/lerobot_v30/libero_spatial_no_noops_lerobot/
 ```
 
-Evaluation of the released checkpoint does not read the training dataset, but the dataset is prepared for subsequent work. Asset revisions, sizes, file counts, and a deterministic path-plus-content tree checksum are tracked in `manifests/assets.json`; actual files are never committed.
+Evaluation of the released checkpoint does not read the training dataset, but the dataset is prepared for subsequent work. The snapshot contains 46 files totaling 4,706,213,231 bytes; its deterministic path-plus-content tree SHA-256 is `fb0532da60ac971d785f9135d0f015746a105d4a768fb3ec0ba15399dea40e7b`. Repository `.gitkeep` placeholders are excluded. Asset metadata is tracked in `manifests/assets.json`, and actual dataset files are never committed.
 
 ## Reproducing the LIBERO baseline
 
@@ -169,8 +169,10 @@ The evaluation scripts set `LIBERO_CONFIG_PATH`, `DIFFSYNTH_MODEL_BASE_PATH`, `D
 Run a one-task, one-episode integration evaluation:
 
 ```bash
-bash reproduce/fastwam_libero/evaluate_minimal.sh
+GPU_ID=0 bash reproduce/fastwam_libero/evaluate_minimal.sh
 ```
+
+`GPU_ID` defaults to `0` and is also used as `CUDA_VISIBLE_DEVICES` unless that variable is already set. This ensures the selected physical GPU is used rather than merely changing the result-file label.
 
 Run the full four-suite benchmark (40 tasks × 50 episodes):
 
@@ -179,6 +181,10 @@ NUM_GPUS=8 bash reproduce/fastwam_libero/evaluate_full.sh
 ```
 
 Raw videos, worker logs, and per-task outputs remain under `evaluate_results/` and are ignored. Curated metrics and provenance are copied to `reports/baselines/` after validation.
+
+### Validated minimal result
+
+On 2026-09-04, `libero_spatial` task 0 completed successfully in its single episode with seed 42, 10 inference steps, sigma shift 5.0, action compilation enabled, and the released checkpoint. The rollout phase took 114.52 seconds including first-use TorchInductor compilation. See `reports/baselines/minimal-validation.json` for compact provenance. This is an integration check, not a statistically meaningful benchmark result.
 
 ## Extension switches and baseline protection
 

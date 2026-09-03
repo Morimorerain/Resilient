@@ -8,6 +8,8 @@ export LIBERO_CONFIG_PATH="${LIBERO_CONFIG_PATH:-$PROJECT_ROOT/AILOG/libero}"
 export DIFFSYNTH_MODEL_BASE_PATH="${DIFFSYNTH_MODEL_BASE_PATH:-$PROJECT_ROOT/checkpoints}"
 export DIFFSYNTH_DOWNLOAD_SOURCE="${DIFFSYNTH_DOWNLOAD_SOURCE:-modelscope}"
 export MUJOCO_GL="${MUJOCO_GL:-egl}"
+GPU_ID="${GPU_ID:-0}"
+export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-$GPU_ID}"
 
 python experiments/libero/eval_libero_single.py \
   task=libero_uncond_2cam224_1e-4 \
@@ -18,4 +20,4 @@ python experiments/libero/eval_libero_single.py \
   EVALUATION.task_id=0 \
   EVALUATION.num_trials=1 \
   EVALUATION.output_dir=./evaluate_results/reproduction/minimal \
-  gpu_id="${GPU_ID:-0}"
+  gpu_id="$GPU_ID"

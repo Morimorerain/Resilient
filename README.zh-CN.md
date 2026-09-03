@@ -10,7 +10,7 @@ Resilient 是一个以可复现性为首要目标、基于 [FastWAM](https://git
 - 基线目标为 `libero_uncond_2cam224.pt` 及其配套数据统计文件。
 - 原始 checkpoint 使用 `EVALUATION.sigma_shift=5.0` 复现。
 - FastWAM 核心默认行为未被修改；项目扩展放在 `src/resilient/` 和 `scripts/resilient/`。
-- 已在下方硬件上验证独立 Python/CUDA 环境与 LIBERO EGL 无界面 reset；正在传输资产并执行评测。
+- 已在下方硬件上验证独立 Python/CUDA 环境、全部固定资产、LIBERO EGL 无界面 reset 与单回合集成评测；完整评测尚待执行。
 
 ## 仓库结构
 
@@ -153,7 +153,7 @@ data/lerobot_v30/libero_object_no_noops_lerobot/
 data/lerobot_v30/libero_spatial_no_noops_lerobot/
 ```
 
-已发布 checkpoint 的仿真评测不会读取训练数据，但后续研究会使用该数据。`manifests/assets.json` 记录资产版本、大小、文件数及按“相对路径＋内容”计算的确定性目录校验值；实际文件禁止上传 Git。
+已发布 checkpoint 的仿真评测不会读取训练数据，但后续研究会使用该数据。该快照包含 46 个文件，共 4,706,213,231 字节；按“相对路径＋内容”计算的确定性目录 SHA-256 为 `fb0532da60ac971d785f9135d0f015746a105d4a768fb3ec0ba15399dea40e7b`。计算时排除仓库的 `.gitkeep` 占位符。`manifests/assets.json` 保存这些信息，实际数据文件禁止上传 Git。
 
 ## 复现 LIBERO 基线
 
@@ -169,8 +169,10 @@ python scripts/resilient/verify_assets.py
 运行单任务、单回合的集成评测：
 
 ```bash
-bash reproduce/fastwam_libero/evaluate_minimal.sh
+GPU_ID=0 bash reproduce/fastwam_libero/evaluate_minimal.sh
 ```
+
+`GPU_ID` 默认为 `0`；如果没有显式设置 `CUDA_VISIBLE_DEVICES`，脚本也会用该值限制可见 GPU，确保选择的是对应物理 GPU，而不只是改变结果文件标签。
 
 运行完整四套件评测（40 个任务 × 每任务 50 回合）：
 
@@ -179,6 +181,10 @@ NUM_GPUS=8 bash reproduce/fastwam_libero/evaluate_full.sh
 ```
 
 原始视频、worker 日志和逐任务输出保留在 `evaluate_results/` 下并被 Git 忽略。验证完成后，只将精简指标和来源信息复制到 `reports/baselines/`。
+
+### 已验证的最小结果
+
+2026-09-04 使用发布 checkpoint，在 seed 42、10 个推理步、sigma shift 5.0、启用动作编译的设置下，`libero_spatial` 第 0 个任务单回合成功。rollout 阶段含首次 TorchInductor 编译共用时 114.52 秒。精简来源信息见 `reports/baselines/minimal-validation.json`。该结果仅为集成检查，不具有统计意义。
 
 ## 扩展开关与基线保护
 

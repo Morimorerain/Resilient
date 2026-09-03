@@ -45,6 +45,8 @@ evaluate_results/
 logs/
 results/
 wandb/
+*.log
+*.err
 onelogger.err
 onelogger.log
 .deepspeed*

@@ -23,7 +23,9 @@ def sha256(path: Path) -> str:
 def tree_sha256(root: Path) -> tuple[str, int, int]:
     """Hash sorted relative paths and contents for a deterministic tree digest."""
     digest = hashlib.sha256()
-    files = sorted(path for path in root.rglob("*") if path.is_file())
+    files = sorted(
+        path for path in root.rglob("*") if path.is_file() and path.name != ".gitkeep"
+    )
     total_size = 0
     for path in files:
         relative_path = path.relative_to(root).as_posix().encode("utf-8")

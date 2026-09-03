@@ -66,8 +66,8 @@
     "revision": "ee018b997c430bb12b5bf3c892d744798c5a2f91",
     "license": "CC-BY-4.0",
     "local_path": "data/lerobot_v30",
-    "file_count": null,
-    "size": null,
-    "snapshot_sha256": null
+    "file_count": 46,
+    "size": 4706213231,
+    "snapshot_sha256": "fb0532da60ac971d785f9135d0f015746a105d4a768fb3ec0ba15399dea40e7b"
   }
 }
