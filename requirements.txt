@@ -1,0 +1,2 @@
+# Resilient currently has no third-party runtime dependencies.
+# Add exact versions here and update README.md when runtime dependencies are introduced.

@@ -1,0 +1,5 @@
+-e .
+pip==24.0
+ruff==0.9.10
+setuptools==75.8.0
+wheel==0.45.1

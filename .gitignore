@@ -1,0 +1,49 @@
+# Local AI work records and temporary files (never commit).
+AILOG/
+
+# Python environments and caches.
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Build and coverage outputs.
+build/
+dist/
+.coverage
+htmlcov/
+
+# Experiment outputs and logs.
+outputs/
+runs/
+logs/
+
+# Datasets: keep only documentation and directory placeholders.
+data/**
+!data/README.md
+!data/raw/
+!data/raw/.gitkeep
+!data/processed/
+!data/processed/.gitkeep
+
+# Model weights: keep only documentation and the directory placeholder.
+models/**
+!models/README.md
+!models/.gitkeep
+
+# Editor and operating-system files.
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Secrets and local overrides.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
