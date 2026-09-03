@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "status": "passed",
+  "evaluation_date": "2026-09-04",
+  "scope": "integration_only",
+  "fastwam_commit": "7faa71108368fbb3b6885649f112af607427a2d4",
+  "checkpoint": {
+    "repository": "yuanty/fastwam",
+    "revision": "8eaceeb24c3cc92ff2a9c9a9d266a4941b836705",
+    "file": "libero_uncond_2cam224.pt",
+    "sha256": "1000437cfcf55c000094f79a2600634c502bcb5b492476b94bf8509883a49579"
+  },
+  "environment_lock": "environment/pip-freeze-cu128.txt",
+  "command": "GPU_ID=4 bash reproduce/fastwam_libero/evaluate_minimal.sh",
+  "configuration": {
+    "task_suite": "libero_spatial",
+    "task_id": 0,
+    "seed": 42,
+    "num_trials": 1,
+    "num_inference_steps": 10,
+    "sigma_shift": 5.0,
+    "compile_action_infer": true,
+    "mujoco": "3.3.2"
+  },
+  "result": {
+    "successes": 1,
+    "episodes": 1,
+    "success_rate": 1.0,
+    "rollout_duration_seconds": 114.52233576774597
+  },
+  "hardware": {
+    "gpu": "NVIDIA RTX 6000 Ada Generation",
+    "gpu_memory_mib": 49140,
+    "driver": "570.133.07",
+    "shared_with_external_process": true
+  },
+  "notes": "The duration includes first-use TorchInductor compilation and is not a throughput benchmark."
+}

@@ -1,0 +1,73 @@
+{
+  "model_repository": {
+    "id": "yuanty/fastwam",
+    "revision": "8eaceeb24c3cc92ff2a9c9a9d266a4941b836705",
+    "license": null,
+    "license_note": "The Hugging Face model card does not declare a weight license; do not redistribute without clarification from the publisher."
+  },
+  "inference_component_repositories": [
+    {
+      "provider": "modelscope",
+      "id": "DiffSynth-Studio/Wan-Series-Converted-Safetensors",
+      "revision": "150f75d811d51f6c7760154aa7fec371dccda529",
+      "license": "Apache-2.0"
+    },
+    {
+      "provider": "modelscope",
+      "id": "Wan-AI/Wan2.1-T2V-1.3B",
+      "revision": "020b9e59db399efa534e408fb295b14a75700daf",
+      "license": "Apache-2.0"
+    }
+  ],
+  "assets": [
+    {
+      "path": "checkpoints/fastwam_release/libero_uncond_2cam224.pt",
+      "size": 12041735140,
+      "sha256": "1000437cfcf55c000094f79a2600634c502bcb5b492476b94bf8509883a49579"
+    },
+    {
+      "path": "checkpoints/fastwam_release/libero_uncond_2cam224_dataset_stats.json",
+      "size": 40939,
+      "sha256": "30f81ad7d5076e97323e3328bce003e01a04cb21327b5bacd21bb72846768638"
+    },
+    {
+      "path": "checkpoints/DiffSynth-Studio/Wan-Series-Converted-Safetensors/models_t5_umt5-xxl-enc-bf16.safetensors",
+      "size": 11361845432,
+      "sha256": "d92de679881d38af9c89eff7bb1b6d6c9d96cb2b69831e4027e9ecabdd38eb23"
+    },
+    {
+      "path": "checkpoints/DiffSynth-Studio/Wan-Series-Converted-Safetensors/Wan2.2_VAE.safetensors",
+      "size": 1409401152,
+      "sha256": "0e913a2ca571c75fcb63385a8edadcca73454af5842596cb1ad11e4142590996"
+    },
+    {
+      "path": "checkpoints/Wan-AI/Wan2.1-T2V-1.3B/google/umt5-xxl/special_tokens_map.json",
+      "size": 6623,
+      "sha256": "7b8a9f5040adb67b5805abdfd42c1f8d0f3d0e711f10726580eb3789cd0ad61d"
+    },
+    {
+      "path": "checkpoints/Wan-AI/Wan2.1-T2V-1.3B/google/umt5-xxl/spiece.model",
+      "size": 4548313,
+      "sha256": "e3909a67b780650b35cf529ac782ad2b6b26e6d1f849d3fbb6a872905f452458"
+    },
+    {
+      "path": "checkpoints/Wan-AI/Wan2.1-T2V-1.3B/google/umt5-xxl/tokenizer.json",
+      "size": 16837417,
+      "sha256": "6e197b4d3dbd71da14b4eb255f4fa91c9c1f2068b20a2de2472967ca3d22602b"
+    },
+    {
+      "path": "checkpoints/Wan-AI/Wan2.1-T2V-1.3B/google/umt5-xxl/tokenizer_config.json",
+      "size": 61728,
+      "sha256": "ed9a3a8b0faa71a70a32847e0435fe036e6e112d4df4edb7bb48a921e344dc05"
+    }
+  ],
+  "dataset_repository": {
+    "id": "yuanty/LIBERO-fastwam",
+    "revision": "ee018b997c430bb12b5bf3c892d744798c5a2f91",
+    "license": "CC-BY-4.0",
+    "local_path": "data/lerobot_v30",
+    "file_count": 46,
+    "size": 4706213231,
+    "snapshot_sha256": "fb0532da60ac971d785f9135d0f015746a105d4a768fb3ec0ba15399dea40e7b"
+  }
+}

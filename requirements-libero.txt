@@ -1,0 +1,11 @@
+# Simulator-only dependencies required by the pinned LIBERO checkout.
+# The historical LIBERO training stack is intentionally excluded because it
+# conflicts with FastWAM's current PyTorch, Transformers, Hydra, and NumPy pins.
+bddl==1.0.1
+cloudpickle==2.1.0
+easydict==1.9
+future==0.18.2
+gym==0.25.2
+matplotlib==3.10.8
+opencv-python==4.12.0.88
+robosuite==1.4.0

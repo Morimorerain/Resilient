@@ -1,23 +1,29 @@
-PYTHON ?= python3.10
-VENV ?= .venv
+PYTHON ?= python
 
-.PHONY: setup test lint run clean
+.PHONY: install install-dev test lint verify-assets capture-environment clean
 
-setup:
-	$(PYTHON) -m venv $(VENV)
-	$(VENV)/bin/python -m pip install --upgrade pip==24.0
-	$(VENV)/bin/python -m pip install -r requirements-dev.txt
+install:
+	$(PYTHON) -m pip install -r requirements.txt
+	$(PYTHON) -m pip install --no-deps -e .
+
+install-dev:
+	$(PYTHON) -m pip install -r requirements-dev.txt
+	$(PYTHON) -m pip install --no-deps -e .
 
 test:
-	$(VENV)/bin/python -m unittest discover -s tests -v
+	PYTHONPATH=src $(PYTHON) -m pytest -m "not gpu and not libero"
 
 lint:
-	$(VENV)/bin/ruff check .
+	$(PYTHON) -m ruff check src/resilient tests scripts/resilient
 
-run:
-	$(VENV)/bin/python -m resilient --version
+verify-assets:
+	$(PYTHON) scripts/resilient/verify_assets.py
+
+capture-environment:
+	$(PYTHON) scripts/resilient/capture_environment.py --output AILOG/environment.json
 
 clean:
-	find src tests -type d -name __pycache__ -prune -exec rm -rf {} +
+	find src tests scripts/resilient -type d -name __pycache__ -prune -exec rm -rf {} +
+	find src tests scripts/resilient -type f -name '*.py[co]' -delete
 	rm -rf build dist .pytest_cache .ruff_cache .mypy_cache htmlcov
-	rm -f .coverage
+	rm -f .coverage coverage.xml report.xml
