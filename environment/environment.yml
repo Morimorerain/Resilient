@@ -1,0 +1,6 @@
+name: resilient-fastwam
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10.8
+  - pip=24.0

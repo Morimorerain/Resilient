@@ -1,0 +1,12 @@
+{
+  "fastwam": {
+    "repository": "https://github.com/yuantianyuan01/FastWAM.git",
+    "commit": "7faa71108368fbb3b6885649f112af607427a2d4",
+    "license": "MIT"
+  },
+  "libero": {
+    "repository": "https://github.com/Lifelong-Robot-Learning/LIBERO.git",
+    "commit": null,
+    "note": "Populate after compatibility validation with MuJoCo 3.3.2."
+  }
+}

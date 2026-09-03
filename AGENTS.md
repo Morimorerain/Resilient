@@ -10,3 +10,4 @@ These rules apply to the entire repository.
 6. Remove one-off smoke-test scripts and their outputs after validation. Convert durable checks into maintained tests under `tests/`.
 7. Before handoff, run the documented tests and lint checks, inspect `git status`, and update documentation whenever commands, paths, hardware requirements, or behavior changed.
 8. Use English for source code, identifiers, docstrings, code comments, configuration comments, CI comments, commit messages, and the primary `README.md`. Keep `README.zh-CN.md` as the synchronized Simplified Chinese user guide.
+9. Keep the pinned FastWAM baseline behavior unchanged. Prefer extensions under `src/resilient/`. Any unavoidable change under `src/fastwam/` must be controlled by a documented Hydra/CLI switch whose default preserves upstream behavior; update both README versions, `docs/upstream-patches.md`, and tests in the same commit.

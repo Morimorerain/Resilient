@@ -4,46 +4,96 @@ AILOG/
 # Python environments and caches.
 .venv/
 venv/
-__pycache__/
+ENV/
+__pypackages__/
+**/__pycache__/
 *.py[cod]
 *.egg-info/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+.hypothesis/
 
 # Build and coverage outputs.
 build/
 dist/
+wheels/
 .coverage
+.coverage.*
 htmlcov/
+coverage.xml
+report.xml
 
-# Experiment outputs and logs.
-outputs/
-runs/
-logs/
-
-# Datasets: keep only documentation and directory placeholders.
+# Datasets: keep only documentation and placeholders.
 data/**
 !data/README.md
-!data/raw/
-!data/raw/.gitkeep
-!data/processed/
-!data/processed/.gitkeep
+!data/lerobot_v30/
+!data/lerobot_v30/.gitkeep
+!data/text_embeds_cache/
+!data/text_embeds_cache/.gitkeep
 
-# Model weights: keep only documentation and the directory placeholder.
-models/**
-!models/README.md
-!models/.gitkeep
+# Model weights and checkpoints: keep only documentation and placeholders.
+checkpoints/**
+!checkpoints/README.md
+!checkpoints/fastwam_release/
+!checkpoints/fastwam_release/.gitkeep
 
-# Editor and operating-system files.
-.DS_Store
-.idea/
-.vscode/
-*.swp
+# Generated experiment outputs.
+outputs/
+runs/
+evaluate_results/
+logs/
+results/
+wandb/
+onelogger.err
+onelogger.log
+.deepspeed*
+
+# Downloaded assets and common large binary formats.
+assets/
+downloads/
+apex/
+CLIP/
+*.jit
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.bin
+*.pkl
+*.pickle
+*.tar
+*.tar.gz
+*.gz
+*.zip
+*.hdr
+*.webp
+*.pgm
+*.tiff
+*.tif
+*.mp4
+
+# Temporary training/download state.
+*.locks*
+*.no_exist*
+*models--t5*
+temp/
 
 # Secrets and local overrides.
 .env
 .env.*
 !.env.example
+credentials
+*.secret
 *.pem
 *.key
+
+# Editor and operating-system files.
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+.devcontainer/devcontainer.json
+.codex/
+.claude/

@@ -1,0 +1,24 @@
+{
+  "model_repository": {
+    "id": "yuanty/fastwam",
+    "revision": "8eaceeb24c3cc92ff2a9c9a9d266a4941b836705"
+  },
+  "assets": [
+    {
+      "path": "checkpoints/fastwam_release/libero_uncond_2cam224.pt",
+      "size": 12041735140,
+      "sha256": "1000437cfcf55c000094f79a2600634c502bcb5b492476b94bf8509883a49579"
+    },
+    {
+      "path": "checkpoints/fastwam_release/libero_uncond_2cam224_dataset_stats.json",
+      "size": 40939,
+      "sha256": null
+    }
+  ],
+  "dataset_repository": {
+    "id": "yuanty/LIBERO-fastwam",
+    "revision": "ee018b997c430bb12b5bf3c892d744798c5a2f91",
+    "local_path": "data/lerobot_v30",
+    "snapshot_sha256": null
+  }
+}

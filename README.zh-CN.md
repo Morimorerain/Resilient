@@ -2,120 +2,173 @@
 
 **简体中文** | [English](README.md)
 
-`Resilient` 是一个面向可复现实验与工程开发的 Python 项目骨架。当前版本只提供项目规范、最小可运行包、测试和持续集成；尚未加入具体算法、数据集或预训练权重。
+Resilient 是一个以可复现性为首要目标、基于 [FastWAM](https://github.com/yuantianyuan01/FastWAM) 开展 LIBERO 评测和后续研究的代码库。由于 FastWAM 的 Hydra 配置和评测入口依赖仓库相对路径，上游代码直接整合在仓库根目录。
 
-## 快速开始
+## 当前状态
 
-以下命令均从仓库根目录执行，不依赖任何机器上的绝对路径。
+- FastWAM 上游固定在提交 `7faa71108368fbb3b6885649f112af607427a2d4`。
+- 基线目标为 `libero_uncond_2cam224.pt` 及其配套数据统计文件。
+- 原始 checkpoint 使用 `EVALUATION.sigma_shift=5.0` 复现。
+- FastWAM 核心默认行为未被修改；项目扩展放在 `src/resilient/` 和 `scripts/resilient/`。
+- 正在下方记录的硬件上验证环境与资产；完整评测完成后补充复现结果。
 
-```bash
-git clone https://github.com/Morimorerain/Resilient.git
-cd Resilient
-
-python3.10 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip==24.0
-python -m pip install -r requirements-dev.txt
-
-python -m resilient --version
-python -m unittest discover -s tests -v
-ruff check .
-```
-
-Windows PowerShell 用户可将激活命令替换为：
-
-```powershell
-.venv\Scripts\Activate.ps1
-```
-
-如果系统没有 Python 3.10.8，可使用 `pyenv` 安装 `.python-version` 中指定的版本。项目要求 Python `>=3.10,<3.11`；本仓库的基线验证版本为 CPython 3.10.8。
-
-## 环境与依赖
-
-- 运行时依赖记录在 `requirements.txt`。
-- 开发、测试和构建依赖记录在 `requirements-dev.txt`，并固定精确版本。
-- 包元数据和工具配置记录在 `pyproject.toml`。
-- 修改 Python 或依赖时，必须在同一次提交中同步修改相应依赖文件、本节、英文 README 的对应章节和下方复现记录。
-- 不要把 `.venv/`、Conda 环境或本机缓存提交到仓库。
-
-## 硬件与系统条件
-
-当前最小功能是 CPU-only，不需要 GPU：
-
-| 项目 | 最低建议 | 本次基线验证环境 |
-| --- | --- | --- |
-| 操作系统 | Linux、macOS 或 Windows | Ubuntu/Linux 5.4，x86_64 |
-| Python | 3.10.8 | CPython 3.10.8 |
-| CPU | 1 核 | AMD EPYC 7542 |
-| 内存 | 256 MB 可用内存 | 503 GiB 系统内存 |
-| GPU | 不需要 | NVIDIA RTX 6000 Ada 48 GB（未被基础测试使用） |
-
-未来若代码依赖 CUDA、特定 GPU 显存或其他硬件，必须同步更新此表，并记录 CUDA、驱动、框架及硬件型号。
-
-## 数据集与模型权重
-
-当前基础版本不需要任何数据集或模型权重，因此暂无下载地址。后续引入外部资产时，必须先更新下表、`data/README.md` 或 `models/README.md`，再提交使用这些资产的代码。
-
-| 资产 | 仓库内目标路径 | 下载地址 | 完整性校验 | 当前状态 |
-| --- | --- | --- | --- | --- |
-| 数据集 | `data/raw/<dataset_name>/` | 尚未使用 | 必须补充 SHA-256 | 未引入 |
-| 处理后数据 | `data/processed/<dataset_name>/` | 由脚本生成 | 必须记录生成命令 | 未引入 |
-| 模型权重 | `models/<model_name>/` | 尚未使用 | 必须补充 SHA-256 | 未引入 |
-
-`data/` 和 `models/` 中的实际内容已被 `.gitignore` 屏蔽，只会提交说明文件和空目录占位符。禁止将数据集、权重、检查点或大体积实验产物直接提交到 Git。
-
-## 目录结构
+## 仓库结构
 
 ```text
 Resilient/
-├── .github/workflows/ci.yml   # 自动化质量检查
-├── AILOG/                    # 本机工作日志与临时文件，不上传
-├── data/                     # 数据目录；实际数据不上传
-│   ├── raw/
-│   └── processed/
-├── models/                   # 模型权重目录；实际权重不上传
-├── src/resilient/            # 项目源码
-├── tests/                    # 可长期维护的自动化测试
-├── AGENTS.md                 # 后续自动化开发约束
-├── pyproject.toml            # Python 包与工具配置
-├── requirements.txt          # 运行时依赖
-└── requirements-dev.txt      # 开发依赖
+├── configs/                       # 上游 Hydra 配置
+├── experiments/libero/            # 上游 LIBERO 评测代码
+├── src/fastwam/                   # 固定版本的 FastWAM 上游实现
+├── src/resilient/                 # Resilient 扩展与适配器
+├── scripts/resilient/             # 可复现的下载与验证工具
+├── environment/                   # Conda 规范与环境说明
+├── manifests/                     # 上游及外部资产固定信息
+├── reproduce/fastwam_libero/      # 最小与完整复现入口
+├── reports/baselines/             # 精简、可提交的复现记录
+├── checkpoints/fastwam_release/   # 下载权重，不上传 Git
+├── data/lerobot_v30/              # LIBERO LeRobot 3.0 数据，不上传 Git
+├── runs/                          # 训练输出，不上传 Git
+├── evaluate_results/              # 原始评测输出，不上传 Git
+└── AILOG/WORKLOG.md                # 本地中文工作日志，不上传 Git
 ```
 
-运行产生的结果统一写入 `outputs/`、`runs/` 或 `logs/`。这些目录不会上传。一次性烟测脚本、烟测数据和烟测输出应在验证完成后删除；可复用的行为应改写为 `tests/` 下的正式测试。
+## 硬件基线
 
-## 复现约定
+| 项目 | 要求/建议 | 本次验证机器 |
+| --- | --- | --- |
+| 系统 | Linux x86_64 | Linux 5.4，x86_64 |
+| Python | CPython 3.10.8 | CPython 3.10.8 |
+| GPU | 支持 BF16 的 NVIDIA GPU；最小评测使用 1 张 | 8 × RTX 6000 Ada，每张 48 GB |
+| NVIDIA 驱动 | 兼容 CUDA 12.8 PyTorch wheel | 570.133.07 |
+| 系统内存 | 待完整评测确认 | 503 GiB |
+| 磁盘 | 环境与 checkpoint 至少 30 GB；数据和结果需更多空间 | 配置前可用约 695 GB |
 
-1. 路径必须相对仓库根目录、当前配置文件或通过命令行参数传入；禁止提交开发者机器的硬编码绝对路径。
-2. 随机实验必须显式记录随机种子；涉及非确定性算子时，还要记录框架的确定性设置。
-3. 每个实验应记录代码提交 SHA、命令、配置、环境版本、输入资产校验值和输出路径。
-4. 新增或升级依赖时同步更新依赖文件和中英文 README；不得只修改本机环境。
-5. 新增数据或权重时记录官方下载地址、许可证、目标路径、解压结构和 SHA-256。
-6. 提交前运行测试与静态检查，并清理临时脚本、缓存和烟测产物。
-7. 源代码、文档字符串、代码注释、配置注释和 CI 注释统一使用英文。面向用户的文档同时维护英文和简体中文，并以英文版为主。
+FastWAM 默认启动 8 个持久化 LIBERO worker。完整评测时可通过 `MULTIRUN.num_gpus` 或下方脚本的 `NUM_GPUS` 调整 GPU 数量。
 
-## 常用命令
+## 环境安装
+
+环境由三个同步维护的文件组成：
+
+- `environment/environment.yml` 固定 Python 和 pip。
+- `requirements.txt` 固定全部 FastWAM 运行依赖，包括 CUDA 12.8 版 PyTorch。
+- `requirements-dev.txt` 增加开发和测试工具。
 
 ```bash
-# 运行最小入口
-python -m resilient --version
+conda env create -f environment/environment.yml
+conda activate resilient-fastwam
 
-# 运行测试
-python -m unittest discover -s tests -v
+python -m pip install -r requirements.txt
+python -m pip install --no-deps -e .
 
-# 静态检查
-ruff check .
-
-# 清理常见本地产物
-make clean
+# 可选：安装开发工具
+python -m pip install -r requirements-dev.txt
 ```
 
-## 复现记录
+官方 LIBERO 包将按 `manifests/upstream.json` 中记录的精确 commit 单独安装，MuJoCo 固定为 `3.3.2`。完成兼容性验证后，会在这里补充最终验证过的安装命令。
 
-| 日期 | 提交/版本 | Python | 依赖 | 资产 | 验证结果 |
-| --- | --- | --- | --- | --- | --- |
-| 2026-09-03 | 初始化骨架 | 3.10.8 | 见 `requirements*.txt` | 无 | CLI、单元测试、Ruff |
+## 外部资产
 
-## 许可证
+### FastWAM 已发布 checkpoint
 
-项目许可证尚未确定。在添加或分发第三方代码、数据集或模型前，请先确认并记录其许可证兼容性。
+来源：<https://huggingface.co/yuanty/fastwam>
+
+```bash
+huggingface-cli download yuanty/fastwam \
+  libero_uncond_2cam224.pt \
+  libero_uncond_2cam224_dataset_stats.json \
+  --revision 8eaceeb24c3cc92ff2a9c9a9d266a4941b836705 \
+  --local-dir ./checkpoints/fastwam_release
+```
+
+目标路径：
+
+```text
+checkpoints/fastwam_release/libero_uncond_2cam224.pt
+checkpoints/fastwam_release/libero_uncond_2cam224_dataset_stats.json
+```
+
+checkpoint 大小为 12,041,735,140 字节，SHA-256 为 `1000437cfcf55c000094f79a2600634c502bcb5b492476b94bf8509883a49579`。统计文件下载后补充校验值，并通过 `scripts/resilient/verify_assets.py` 验证。
+
+### LIBERO LeRobot 3.0 数据集
+
+训练和后续工作使用 <https://huggingface.co/datasets/yuanty/LIBERO-fastwam> 的固定快照：
+
+```bash
+huggingface-cli download yuanty/LIBERO-fastwam \
+  --repo-type dataset \
+  --include "lerobot_v30/**" \
+  --revision ee018b997c430bb12b5bf3c892d744798c5a2f91 \
+  --local-dir ./data
+```
+
+目标目录：
+
+```text
+data/lerobot_v30/libero_10_no_noops_lerobot/
+data/lerobot_v30/libero_goal_no_noops_lerobot/
+data/lerobot_v30/libero_object_no_noops_lerobot/
+data/lerobot_v30/libero_spatial_no_noops_lerobot/
+```
+
+已发布 checkpoint 的仿真评测不会读取训练数据，但后续研究会使用该数据。`manifests/assets.json` 记录资产版本、大小和校验值；实际文件禁止上传 Git。
+
+## 复现 LIBERO 基线
+
+首先验证环境和资产：
+
+```bash
+python scripts/resilient/capture_environment.py --output AILOG/environment.json
+python scripts/resilient/verify_assets.py
+```
+
+运行单任务、单回合的集成评测：
+
+```bash
+bash reproduce/fastwam_libero/evaluate_minimal.sh
+```
+
+运行完整四套件评测（40 个任务 × 每任务 50 回合）：
+
+```bash
+NUM_GPUS=8 bash reproduce/fastwam_libero/evaluate_full.sh
+```
+
+原始视频、worker 日志和逐任务输出保留在 `evaluate_results/` 下并被 Git 忽略。验证完成后，只将精简指标和来源信息复制到 `reports/baselines/`。
+
+## 扩展开关与基线保护
+
+以下规则为强制要求：
+
+1. 新功能优先放在 `src/resilient/`，避免修改 `src/fastwam/`。
+2. 如果必须修改 FastWAM 上游文件，新行为必须由明确的 Hydra/CLI 参数控制。
+3. 每个 Resilient 开关必须默认关闭或保持上游原始值，保证文档中的基线命令行为不变。
+4. 新开关必须在同一提交中加入下表、中英文 README、Hydra 配置和测试。
+5. 无法避免的上游补丁记录到 `docs/upstream-patches.md`。
+
+| 开关 | 默认值 | 作用范围 | 对基线的影响 |
+| --- | --- | --- | --- |
+| 暂无 | — | 尚未修改 FastWAM 源码 | 无 |
+
+## 开发检查
+
+轻量 CI 与完整 GPU 环境分离：
+
+```bash
+python -m pip install -r requirements-ci.txt
+PYTHONPATH=src python -m pytest -m "not gpu and not libero"
+ruff check src/resilient tests scripts/resilient
+```
+
+一次性调试脚本和输出使用后必须删除。可长期复用的 GPU/LIBERO 检查放入 `tests/integration/` 并添加明确标记。
+
+## 可复现性约定
+
+- 只使用仓库相对路径或用户传入路径，禁止提交机器专属的硬编码绝对路径。
+- 记录 Git SHA、上游 SHA、命令、Hydra 覆盖参数、随机种子、硬件、环境、资产版本/校验值和结果。
+- 依赖变化时同步更新环境文件和中英文 README。
+- 数据集、checkpoint、仿真资产、缓存、视频、日志和原始实验结果不得上传 Git。
+- 源码和代码注释使用英文；`README.md` 使用英文；`README.zh-CN.md` 使用简体中文；被忽略的 `AILOG/WORKLOG.md` 使用中文。
+
+## 上游与许可证
+
+FastWAM 来自 <https://github.com/yuantianyuan01/FastWAM>，保留 MIT License 和完整 Git 历史。来源信息见 `LICENSE` 与 `manifests/upstream.json`。
