@@ -3,3 +3,6 @@ alpha: 128
 dropout: 0.0
 cap_rank_to_dimension: true
 require_proprio_encoder: true
+# Optional LoRA-only initialization for a new optimization stage. This is not
+# an optimizer-state resume and therefore starts a fresh LR schedule.
+initial_checkpoint: null

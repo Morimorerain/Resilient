@@ -352,6 +352,11 @@ rank。每个 task 的 LIBERO 初始状态 0--49 恰好各使用一次；seed �
 `max_checkpoints` 默认为 2，只会在新状态安全写完后删除更旧状态；参考环境中每个 ZeRO 状态
 约占 50 GB，因此长训练应按磁盘空间设置保留数量。
 
+如需在已完成的 LoRA 上开启下一训练阶段，同时设置 `adapter.initial_checkpoint` 与递增后的
+`opsd.epoch_offset`。该方式只加载 Student LoRA，重新开始 optimizer/余弦学习率周期，并使用
+下一 epoch 的打乱顺序与派生 seed。它不同于用于恢复中断阶段、同时恢复 optimizer/scheduler
+状态的 `resume`。
+
 参考硬件仍为 Linux、8×NVIDIA RTX 6000 Ada 48 GB、CUDA 12.8 和 bf16；默认支持 4 卡与 8
 卡。由于尚未正式运行或计时 OPSD 训练，目前不声明其最终峰值显存需求。本阶段已验证 CPU
 单元测试、Hydra 配置组合、LoRA 插入/

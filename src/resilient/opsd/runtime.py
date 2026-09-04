@@ -36,7 +36,7 @@ from fastwam.utils.pytorch_utils import set_global_seed
 from resilient.faults import FaultTransition, build_fault_pipeline
 from resilient.faults.paired_observation import capture_paired_observation
 
-from .adapters import FastWAMLoraConfig, inject_fastwam_aligned_lora
+from .adapters import FastWAMLoraConfig, inject_fastwam_aligned_lora, load_adapter_state_dict
 from .model_adapter import OPSDScoringModule
 from .rollout import generate_student_trajectory, validate_trace_against_scheduler
 from .teacher_inputs import TeacherInputContext, build_teacher_input_provider
@@ -175,6 +175,7 @@ def validate_opsd_config(cfg: DictConfig, *, world_size: int | None = None) -> d
         "lr_scheduler_type": str(cfg.lr_scheduler_type),
         "lr_warmup_ratio": float(cfg.lr_warmup_ratio),
         "num_epochs": int(opsd.num_epochs),
+        "epoch_offset": int(opsd.epoch_offset),
         "rollouts_per_task": int(opsd.rollout.rollouts_per_task),
         "schedule_seed": int(opsd.rollout.schedule_seed),
         "schedule_policy": "global_deterministic_shuffle_then_rank_stride",
@@ -272,6 +273,15 @@ def run_opsd_training(cfg: DictConfig) -> None:
     _load_model_checkpoint(model, str(Path(str(cfg.ckpt)).expanduser().resolve()))
     adapter_cfg = FastWAMLoraConfig.from_config(OmegaConf.to_container(cfg.adapter, resolve=True))
     adapter_audit = inject_fastwam_aligned_lora(model, adapter_cfg)
+    initial_adapter = cfg.adapter.get("initial_checkpoint")
+    if initial_adapter not in {None, "", "null"}:
+        initial_adapter_path = Path(str(initial_adapter)).expanduser().resolve()
+        if not initial_adapter_path.is_file():
+            raise FileNotFoundError(f"Initial LoRA checkpoint not found: {initial_adapter_path}")
+        initial_state = torch.load(initial_adapter_path, map_location="cpu", weights_only=True)
+        if not isinstance(initial_state, dict):
+            raise TypeError("Initial LoRA checkpoint must contain a state-dict mapping.")
+        load_adapter_state_dict(model, initial_state)
     if accelerator.is_main_process:
         (output_dir / "adapter_audit.json").write_text(
             json.dumps(adapter_audit, indent=2) + "\n", encoding="utf-8"
@@ -345,11 +355,12 @@ def run_opsd_training(cfg: DictConfig) -> None:
     metrics_path = output_dir / f"metrics_rank_{accelerator.process_index:02d}.jsonl"
 
     for epoch_index in range(resume_epoch, int(cfg.opsd.num_epochs)):
+        schedule_epoch = epoch_index + int(cfg.opsd.epoch_offset)
         global_schedule = build_rollout_schedule(
             suites=suites,
             tasks_per_suite=10,
             rollouts_per_task=rollouts_per_task,
-            epoch=epoch_index,
+            epoch=schedule_epoch,
             schedule_seed=int(cfg.opsd.rollout.schedule_seed),
             environment_seed=int(cfg.opsd.rollout.environment_seed),
             inference_seed=int(cfg.opsd.rollout.inference_seed),
@@ -378,7 +389,7 @@ def run_opsd_training(cfg: DictConfig) -> None:
             )
             fault_cfg = OmegaConf.to_container(cfg.fault, resolve=True)
             pipeline = build_fault_pipeline(fault_cfg)
-            episode_index = epoch_index * global_rollouts_per_epoch + descriptor.sample_id
+            episode_index = schedule_epoch * global_rollouts_per_epoch + descriptor.sample_id
             context = pipeline.context(episode_index, 0)
             try:
                 env.reset()
@@ -464,7 +475,7 @@ def run_opsd_training(cfg: DictConfig) -> None:
                     trajectory=trajectory,
                 )
                 record = {
-                    "epoch": epoch_index + 1,
+                    "epoch": schedule_epoch + 1,
                     "global_step": trainer.global_step,
                     "rollout_index": trainer.rollout_index,
                     "suite": suite_name,

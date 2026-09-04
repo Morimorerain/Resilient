@@ -32,6 +32,8 @@ max_checkpoints: 2
 opsd:
   validate_only: false
   num_epochs: 1
+  # Add this value to schedule/metric epoch indices for staged continuation.
+  epoch_offset: 0
   dataset_stats_path: checkpoints/fastwam_release/libero_uncond_2cam224_dataset_stats.json
   distributed:
     num_processes: 4

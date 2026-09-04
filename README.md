@@ -367,6 +367,12 @@ Each epoch visits all 40 standard tasks 50 times and writes a complete resumable
 `max_checkpoints` (default 2) removes older states only after a new state is safely written. This
 matters because one reference ZeRO state occupies approximately 50 GB.
 
+To continue from a completed LoRA as a fresh optimization stage, set
+`adapter.initial_checkpoint` and advance `opsd.epoch_offset`. This loads only the Student LoRA,
+starts a fresh optimizer/cosine schedule, and uses the next epoch's shuffled order and derived
+seeds. It differs intentionally from `resume`, which restores optimizer and scheduler state within
+an interrupted stage.
+
 The reference hardware remains Linux, 8 x NVIDIA RTX 6000 Ada 48 GB, CUDA 12.8, and bf16. Four-
 and eight-GPU execution are the supported defaults; full OPSD training has not yet been run or
 timed, so its final peak-memory requirement is not yet claimed.
