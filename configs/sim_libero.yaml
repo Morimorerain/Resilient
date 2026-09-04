@@ -58,6 +58,13 @@ EVALUATION:
     checkpoint: null
     training_config: null
 
+  # Disabled by default to preserve the Fast-WAM benchmark path. When enabled,
+  # load an external state bank and reject overlap with its training reference.
+  initial_state_bank:
+    enabled: false
+    manifest: null
+    training_manifest: null
+
 MULTIRUN:
   create_only: false
   task_file: null

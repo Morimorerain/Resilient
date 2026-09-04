@@ -247,6 +247,28 @@ python scripts/resilient/evaluate_fault.py \
 标识，manifest 同时记录基座模型、adapter 和配置；不传这两个参数时仍走原 Fast-WAM 基线加载
 路径。
 
+已有 checkpoint 无需重新训练即可进行未见状态验证。先通过带 seed 的 LIBERO reset 生成独立
+验证状态库；该命令也会从已完成 OPSD run 的 metrics 重建训练实际见过的官方状态及环境 seed：
+
+```bash
+python scripts/resilient/generate_libero_validation_states.py \
+  --training-run runs/opsd/my_run \
+  --output-dir data/libero_state_banks/my_unseen_validation \
+  --states-per-task 50 \
+  --base-seed 104729
+```
+
+随后在原评测命令中同时加入：
+
+```bash
+  --state-bank-manifest data/libero_state_banks/my_unseen_validation/validation_manifest.json \
+  --training-state-manifest data/libero_state_banks/my_unseen_validation/training_reference_manifest.json
+```
+
+状态库属于数据集内容并被 Git 忽略。评测器会逐个验证 simulator state 指纹；只要验证状态
+哈希或生成 seed 与训练有一个重合，就会拒绝启动。该开关默认关闭，因此 Fast-WAM 官方基线
+路径不变，已有 base/LoRA checkpoint 也不需要重新训练。
+
 相机平移单位为米，沿原始相机局部轴；姿态按局部 X、Y、Z 顺序进行右手系旋转，单位为度。
 MuJoCo 相机沿局部 `-Z` 观察，局部 `+X` 对应原始图像右方，局部 `+Y` 对应原始图像上方。
 插件在 Teacher 请求特权图像时会临时恢复原始位姿，配对过程不会推进仿真时间。

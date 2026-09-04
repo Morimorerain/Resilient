@@ -251,6 +251,30 @@ python scripts/resilient/evaluate_fault.py \
 the adapter checkpoint identifier, and the manifest records the base model, adapter, and config.
 Without these arguments, evaluation follows the unchanged Fast-WAM checkpoint path.
 
+For an unseen-state evaluation of an existing checkpoint, first generate a validation state bank
+from seeded LIBERO resets. The command also reconstructs the exact official-state exposure and
+environment seeds from the completed OPSD run metrics:
+
+```bash
+python scripts/resilient/generate_libero_validation_states.py \
+  --training-run runs/opsd/my_run \
+  --output-dir data/libero_state_banks/my_unseen_validation \
+  --states-per-task 50 \
+  --base-seed 104729
+```
+
+Then add both manifests to the normal evaluation command:
+
+```bash
+  --state-bank-manifest data/libero_state_banks/my_unseen_validation/validation_manifest.json \
+  --training-state-manifest data/libero_state_banks/my_unseen_validation/training_reference_manifest.json
+```
+
+The state-bank path is ignored by Git as dataset content. The evaluator verifies every simulator
+state fingerprint and refuses to start if any state hash or generation seed overlaps training.
+The switch is disabled by default, preserving the official Fast-WAM benchmark path and allowing
+existing base/LoRA checkpoints to be evaluated without retraining.
+
 For camera pose faults, translation is expressed in metres along the original camera-local axes;
 rotation uses right-handed local X-then-Y-then-Z rotations in degrees. MuJoCo cameras look along
 local `-Z`; local `+X` is raw-image right and local `+Y` is raw-image up. The plugin restores the

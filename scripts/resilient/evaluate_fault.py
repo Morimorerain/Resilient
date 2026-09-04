@@ -90,6 +90,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--preview-task-id", type=int, default=0)
     parser.add_argument("--preview-init-state", type=int, default=0)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--state-bank-manifest",
+        type=Path,
+        default=None,
+        help="Optional unseen-state validation manifest.",
+    )
+    parser.add_argument(
+        "--training-state-manifest",
+        type=Path,
+        default=None,
+        help="Training exposure manifest used by the mandatory leakage guard.",
+    )
     parser.add_argument("--task-config", default="libero_uncond_2cam224_1e-4")
     parser.add_argument("--sigma-shift", type=float, default=5.0)
     parser.add_argument(
@@ -212,6 +224,7 @@ def render_comparison_image(
     task_id: int,
     init_state_index: int,
     seed: int,
+    state_bank_manifest: Path | None = None,
 ) -> None:
     """Render nominal and faulted views from one unchanged initial state."""
     import torch
@@ -228,8 +241,25 @@ def render_comparison_image(
     if not 0 <= task_id < int(suite.n_tasks):
         raise ValueError(f"Preview task {task_id} is outside suite {suite_name}.")
     task = suite.get_task(task_id)
-    states_path = Path(get_libero_path("init_states")) / task.problem_folder / task.init_states_file
-    states = torch.load(states_path, weights_only=False)
+    if state_bank_manifest is None:
+        states_path = (
+            Path(get_libero_path("init_states")) / task.problem_folder / task.init_states_file
+        )
+        states = torch.load(states_path, weights_only=False)
+    else:
+        from resilient.state_banks import load_task_states
+
+        manifest = json.loads(state_bank_manifest.read_text(encoding="utf-8"))
+        count = sum(
+            record["suite"] == suite_name and int(record["task_id"]) == task_id
+            for record in manifest["states"]
+        )
+        states = load_task_states(
+            state_bank_manifest,
+            suite=suite_name,
+            task_id=task_id,
+            expected_count=count,
+        )
     if not 0 <= init_state_index < len(states):
         raise ValueError(f"Preview state {init_state_index} is unavailable.")
 
@@ -297,12 +327,28 @@ def main() -> int:
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint}")
     if (args.opsd_adapter is None) != (args.opsd_config is None):
         raise ValueError("--opsd-adapter and --opsd-config must be provided together.")
+    if (args.state_bank_manifest is None) != (args.training_state_manifest is None):
+        raise ValueError(
+            "--state-bank-manifest and --training-state-manifest must be provided together."
+        )
     opsd_adapter = resolve_path(args.opsd_adapter) if args.opsd_adapter else None
     opsd_config = resolve_path(args.opsd_config) if args.opsd_config else None
     if opsd_adapter is not None and not opsd_adapter.is_file():
         raise FileNotFoundError(f"OPSD adapter not found: {opsd_adapter}")
     if opsd_config is not None and not opsd_config.is_file():
         raise FileNotFoundError(f"OPSD config not found: {opsd_config}")
+    state_bank_manifest = (
+        resolve_path(args.state_bank_manifest) if args.state_bank_manifest else None
+    )
+    training_state_manifest = (
+        resolve_path(args.training_state_manifest) if args.training_state_manifest else None
+    )
+    if state_bank_manifest is not None:
+        from resilient.state_banks import assert_disjoint_manifests, load_manifest
+
+        assert_disjoint_manifests(
+            load_manifest(state_bank_manifest), load_manifest(training_state_manifest)
+        )
     dataset_stats = infer_dataset_stats(checkpoint, args.dataset_stats)
     fault_config = load_fault_config(args.fault_config, args.severity, args.seed)
     pipeline = build_fault_pipeline(fault_config)
@@ -324,6 +370,12 @@ def main() -> int:
         "sigma_shift": args.sigma_shift,
         "seed": args.seed,
         "create_only": args.create_only,
+        "state_bank_manifest": (
+            _portable_path(state_bank_manifest) if state_bank_manifest else None
+        ),
+        "training_state_manifest": (
+            _portable_path(training_state_manifest) if training_state_manifest else None
+        ),
         "preview": {
             "suite": preview_suite,
             "task_id": args.preview_task_id,
@@ -340,6 +392,7 @@ def main() -> int:
         task_id=args.preview_task_id,
         init_state_index=args.preview_init_state,
         seed=args.seed,
+        state_bank_manifest=state_bank_manifest,
     )
 
     suites_override = json.dumps(list(args.suites), separators=(",", ":"))
@@ -364,6 +417,14 @@ def main() -> int:
                 "EVALUATION.opsd_adapter.enabled=true",
                 f"EVALUATION.opsd_adapter.checkpoint={opsd_adapter}",
                 f"EVALUATION.opsd_adapter.training_config={opsd_config}",
+            ]
+        )
+    if state_bank_manifest is not None and training_state_manifest is not None:
+        command.extend(
+            [
+                "EVALUATION.initial_state_bank.enabled=true",
+                f"EVALUATION.initial_state_bank.manifest={state_bank_manifest}",
+                f"EVALUATION.initial_state_bank.training_manifest={training_state_manifest}",
             ]
         )
     runtime_env = os.environ.copy()

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 import unittest
 
 import torch
@@ -23,6 +24,11 @@ from resilient.opsd.runtime import build_rollout_schedule
 from resilient.opsd.teacher_inputs import TeacherInputContext, build_teacher_input_provider
 from resilient.opsd.trainer import OPSDFlowTrainer, _scalar_to_float
 from resilient.opsd.types import ActionConditioning, StudentTrajectory
+from resilient.state_banks import (
+    assert_disjoint_manifests,
+    load_task_states,
+    state_fingerprint,
+)
 
 
 class _ToyFastWAM(nn.Module):
@@ -41,6 +47,46 @@ class _ToyFastWAM(nn.Module):
 
 
 class OPSDLossTests(unittest.TestCase):
+    def test_state_bank_rejects_leakage_and_verifies_tensor(self) -> None:
+        import tempfile
+        from pathlib import Path
+
+        training = {
+            "schema_version": 1,
+            "states": [{"state_sha256": "seen", "generation_seed": 1}],
+        }
+        validation = {
+            "schema_version": 1,
+            "states": [{"state_sha256": "unseen", "generation_seed": 2}],
+        }
+        assert_disjoint_manifests(validation, training)
+        with self.assertRaisesRegex(ValueError, "State leakage"):
+            assert_disjoint_manifests(training, training)
+
+        state = torch.tensor([1.0, 2.0], dtype=torch.float64)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            torch.save(torch.stack([state]), root / "task.pt")
+            manifest = {
+                "schema_version": 1,
+                "states": [
+                    {
+                        "suite": "suite",
+                        "task_id": 0,
+                        "state_index": 0,
+                        "state_sha256": state_fingerprint(state),
+                        "generation_seed": 2,
+                        "file": "task.pt",
+                    }
+                ],
+            }
+            path = root / "manifest.json"
+            path.write_text(json.dumps(manifest), encoding="utf-8")
+            loaded = load_task_states(
+                path, suite="suite", task_id=0, expected_count=1
+            )
+            self.assertTrue(torch.equal(loaded[0], state))
+
     def test_rollout_schedule_is_shuffled_balanced_and_reproducible(self) -> None:
         kwargs = {
             "suites": ["suite_a", "suite_b"],

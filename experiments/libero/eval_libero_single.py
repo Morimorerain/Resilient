@@ -41,6 +41,7 @@ from fastwam.utils.pytorch_utils import set_global_seed
 from fastwam.datasets.lerobot.robot_video_dataset import DEFAULT_PROMPT
 from libero.libero import benchmark, get_libero_path
 from resilient.faults import FaultPipeline, FaultTransition, build_fault_pipeline
+from resilient.state_banks import assert_disjoint_manifests, load_manifest, load_task_states
 from experiments.libero.action_ensembler import ActionEnsembler
 
 OmegaConf.register_new_resolver("eval", eval)
@@ -843,16 +844,30 @@ def _run_task_to_file(
 
     task_suite = benchmark.get_benchmark_dict()[suite_name]()
     task = task_suite.get_task(task_id)
-    init_states_path = (
-        Path(get_libero_path("init_states"))
-        / task.problem_folder
-        / task.init_states_file
-    )
-    initial_states = torch.load(init_states_path, weights_only=False)
-    while len(initial_states) < int(task_cfg.EVALUATION.num_trials):
-        initial_states.extend(
-            initial_states[: int(task_cfg.EVALUATION.num_trials) - len(initial_states)]
+    state_bank = task_cfg.EVALUATION.get("initial_state_bank", {})
+    if bool(state_bank.get("enabled", False)):
+        manifest_path = Path(str(state_bank.manifest)).expanduser().resolve()
+        training_manifest_path = Path(str(state_bank.training_manifest)).expanduser().resolve()
+        validation_manifest = load_manifest(manifest_path)
+        training_manifest = load_manifest(training_manifest_path)
+        assert_disjoint_manifests(validation_manifest, training_manifest)
+        initial_states = load_task_states(
+            manifest_path,
+            suite=suite_name,
+            task_id=task_id,
+            expected_count=int(task_cfg.EVALUATION.num_trials),
         )
+    else:
+        init_states_path = (
+            Path(get_libero_path("init_states"))
+            / task.problem_folder
+            / task.init_states_file
+        )
+        initial_states = torch.load(init_states_path, weights_only=False)
+        while len(initial_states) < int(task_cfg.EVALUATION.num_trials):
+            initial_states.extend(
+                initial_states[: int(task_cfg.EVALUATION.num_trials) - len(initial_states)]
+            )
 
     video_dir = output_root / suite_name / "videos"
     video_dir.mkdir(parents=True, exist_ok=True)
