@@ -60,12 +60,14 @@ def resolved_config_hash(cfg: DictConfig) -> str:
 def validate_opsd_config(cfg: DictConfig, *, world_size: int | None = None) -> dict[str, Any]:
     """Validate algorithm invariants without loading the model or using a GPU."""
     opsd = cfg.opsd
-    if int(opsd.num_epochs) != 1:
-        raise ValueError("The initial OPSD configuration requires num_epochs=1.")
+    if int(opsd.num_epochs) <= 0:
+        raise ValueError("opsd.num_epochs must be positive.")
     if str(cfg.lr_scheduler_type) != "cosine":
         raise ValueError("The initial OPSD configuration supports lr_scheduler_type=cosine.")
     if not 0.0 <= float(cfg.lr_warmup_ratio) < 1.0:
         raise ValueError("lr_warmup_ratio must be in [0, 1).")
+    if int(cfg.max_checkpoints) <= 0:
+        raise ValueError("max_checkpoints must be positive.")
     requested_gpus = int(opsd.distributed.num_processes)
     if requested_gpus not in {4, 8}:
         raise ValueError("OPSD supports the documented 4-GPU or 8-GPU launch modes.")
@@ -86,10 +88,7 @@ def validate_opsd_config(cfg: DictConfig, *, world_size: int | None = None) -> d
     if not bool(cfg.model.load_text_encoder):
         raise ValueError("On-policy OPSD prompts require the Fast-WAM text encoder.")
     local_rollouts = (
-        len(opsd.rollout.suites)
-        * 10
-        * int(opsd.rollout.rollouts_per_task)
-        // requested_gpus
+        len(opsd.rollout.suites) * 10 * int(opsd.rollout.rollouts_per_task) // requested_gpus
     )
     accumulation = int(cfg.gradient_accumulation_steps)
     if accumulation <= 0 or local_rollouts % accumulation != 0:
@@ -116,6 +115,8 @@ def validate_opsd_config(cfg: DictConfig, *, world_size: int | None = None) -> d
         "gradient_accumulation_steps": accumulation,
         "lr_scheduler_type": str(cfg.lr_scheduler_type),
         "lr_warmup_ratio": float(cfg.lr_warmup_ratio),
+        "num_epochs": int(opsd.num_epochs),
+        "max_checkpoints": int(cfg.max_checkpoints),
     }
 
 
@@ -226,7 +227,9 @@ def run_opsd_training(cfg: DictConfig) -> None:
         * int(cfg.opsd.rollout.rollouts_per_task)
         // accelerator.num_processes
     )
-    total_optimizer_steps = local_trajectories // int(cfg.gradient_accumulation_steps)
+    total_optimizer_steps = (
+        local_trajectories * int(cfg.opsd.num_epochs) // int(cfg.gradient_accumulation_steps)
+    )
     warmup_steps = int(total_optimizer_steps * float(cfg.lr_warmup_ratio))
 
     def learning_rate_multiplier(step: int) -> float:
@@ -237,9 +240,7 @@ def run_opsd_training(cfg: DictConfig) -> None:
 
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, learning_rate_multiplier)
     scoring_model = OPSDScoringModule(model)
-    scoring_model, optimizer, scheduler = accelerator.prepare(
-        scoring_model, optimizer, scheduler
-    )
+    scoring_model, optimizer, scheduler = accelerator.prepare(scoring_model, optimizer, scheduler)
     trainer = OPSDFlowTrainer(
         model=scoring_model,
         optimizer=optimizer,
@@ -275,84 +276,66 @@ def run_opsd_training(cfg: DictConfig) -> None:
     rollouts_per_task = int(cfg.opsd.rollout.rollouts_per_task)
     if trainer.rollout_index % rollouts_per_task != 0:
         raise ValueError("Resume checkpoints must be written at a complete task boundary.")
-    completed_local_rollouts = trainer.rollout_index
-    completed_local_tasks = trainer.rollout_index // rollouts_per_task
+    local_rollouts_per_epoch = len(local_tasks) * rollouts_per_task
+    completed_before_epoch = trainer.epoch * local_rollouts_per_epoch
+    completed_in_resume_epoch = trainer.rollout_index - completed_before_epoch
+    if not 0 <= completed_in_resume_epoch <= local_rollouts_per_epoch:
+        raise ValueError(
+            "Resume checkpoint epoch and rollout_index are inconsistent with this world size."
+        )
+    if completed_in_resume_epoch % rollouts_per_task != 0:
+        raise ValueError("Resume checkpoints must be written at a complete task boundary.")
+    resume_task_offset = completed_in_resume_epoch // rollouts_per_task
+    resume_epoch = trainer.epoch
     metrics_path = output_dir / f"metrics_rank_{accelerator.process_index:02d}.jsonl"
 
-    for local_task_index, (suite_name, task_id) in enumerate(local_tasks):
-        if local_task_index < completed_local_tasks:
-            continue
-        suite = benchmark.get_benchmark_dict()[suite_name]()
-        task = suite.get_task(task_id)
-        states_path = (
-            Path(get_libero_path("init_states")) / task.problem_folder / task.init_states_file
-        )
-        initial_states = torch.load(states_path, weights_only=False)
-        env, task_description = get_libero_env(
-            task, LIBERO_ENV_RESOLUTION, int(cfg.opsd.rollout.environment_seed)
-        )
-        fault_cfg = OmegaConf.to_container(cfg.fault, resolve=True)
-        pipeline = build_fault_pipeline(fault_cfg)
-        episode_index = local_task_index
-        context = pipeline.context(episode_index, 0)
-        try:
-            env.reset()
-            pipeline.on_reset(env, context)
-            raw_obs = env.set_init_state(initial_states[0])
-            obs = pipeline.transform_observation(raw_obs, env, context)
-            env_step = 0
-            for _ in range(int(cfg.opsd.rollout.num_steps_wait)):
-                raw_obs, obs, done, taken = _execute_action_chunk(
-                    env=env,
-                    pipeline=pipeline,
-                    raw_observation=raw_obs,
-                    student_observation=obs,
-                    action_chunk=[get_libero_dummy_action()],
-                    episode_index=episode_index,
-                    start_step=env_step,
-                )
-                env_step += taken
-                if done:
-                    raise RuntimeError("LIBERO task terminated during the warm-up period.")
+    for epoch_index in range(resume_epoch, int(cfg.opsd.num_epochs)):
+        task_offset = resume_task_offset if epoch_index == resume_epoch else 0
+        for local_task_index, (suite_name, task_id) in enumerate(local_tasks):
+            if local_task_index < task_offset:
+                continue
+            suite = benchmark.get_benchmark_dict()[suite_name]()
+            task = suite.get_task(task_id)
+            states_path = (
+                Path(get_libero_path("init_states")) / task.problem_folder / task.init_states_file
+            )
+            initial_states = torch.load(states_path, weights_only=False)
+            env, task_description = get_libero_env(
+                task, LIBERO_ENV_RESOLUTION, int(cfg.opsd.rollout.environment_seed)
+            )
+            fault_cfg = OmegaConf.to_container(cfg.fault, resolve=True)
+            pipeline = build_fault_pipeline(fault_cfg)
+            episode_index = epoch_index * len(local_tasks) + local_task_index
+            context = pipeline.context(episode_index, 0)
+            try:
+                env.reset()
+                pipeline.on_reset(env, context)
+                raw_obs = env.set_init_state(initial_states[0])
+                obs = pipeline.transform_observation(raw_obs, env, context)
+                env_step = 0
+                for _ in range(int(cfg.opsd.rollout.num_steps_wait)):
+                    raw_obs, obs, done, taken = _execute_action_chunk(
+                        env=env,
+                        pipeline=pipeline,
+                        raw_observation=raw_obs,
+                        student_observation=obs,
+                        action_chunk=[get_libero_dummy_action()],
+                        episode_index=episode_index,
+                        start_step=env_step,
+                    )
+                    env_step += taken
+                    if done:
+                        raise RuntimeError("LIBERO task terminated during the warm-up period.")
 
-            for rollout_in_task in range(rollouts_per_task):
-                paired = capture_paired_observation(
-                    env=env,
-                    pipeline=pipeline,
-                    capture_raw_observation=lambda: _capture_current_observation(env),
-                    context=pipeline.context(episode_index, env_step),
-                )
-                student_image, student_proprio, _ = _obs_to_model_input(
-                    obs=paired.student,
-                    cfg=cfg,
-                    processor=processor,
-                    width=video_w,
-                    height=video_h,
-                    device=str(accelerator.device),
-                    dtype=model_dtype,
-                )
-                prompt = DEFAULT_PROMPT.format(task=task_description)
-                student_conditioning = ActionConditioning(
-                    input_image=student_image,
-                    prompt=prompt,
-                    proprio=student_proprio,
-                )
-                base_model = trainer.fastwam
-                trajectory = generate_student_trajectory(
-                    base_model,
-                    student_conditioning,
-                    action_horizon=int(cfg.opsd.rollout.action_horizon),
-                    num_inference_steps=int(cfg.opsd.rollout.num_inference_steps),
-                    sigma_shift=float(cfg.opsd.rollout.sigma_shift),
-                    seed=int(cfg.opsd.rollout.inference_seed),
-                    rand_device=str(cfg.opsd.rollout.rand_device),
-                    compile_action_infer=bool(cfg.opsd.rollout.compile_action_infer),
-                )
-                validate_trace_against_scheduler(base_model, trajectory)
-
-                def encode_privileged(privileged_obs: object) -> torch.Tensor:
-                    image, _, _ = _obs_to_model_input(
-                        obs=privileged_obs,
+                for rollout_in_task in range(rollouts_per_task):
+                    paired = capture_paired_observation(
+                        env=env,
+                        pipeline=pipeline,
+                        capture_raw_observation=lambda: _capture_current_observation(env),
+                        context=pipeline.context(episode_index, env_step),
+                    )
+                    student_image, student_proprio, _ = _obs_to_model_input(
+                        obs=paired.student,
                         cfg=cfg,
                         processor=processor,
                         width=video_w,
@@ -360,81 +343,118 @@ def run_opsd_training(cfg: DictConfig) -> None:
                         device=str(accelerator.device),
                         dtype=model_dtype,
                     )
-                    return image
+                    prompt = DEFAULT_PROMPT.format(task=task_description)
+                    student_conditioning = ActionConditioning(
+                        input_image=student_image,
+                        prompt=prompt,
+                        proprio=student_proprio,
+                    )
+                    base_model = trainer.fastwam
+                    trajectory = generate_student_trajectory(
+                        base_model,
+                        student_conditioning,
+                        action_horizon=int(cfg.opsd.rollout.action_horizon),
+                        num_inference_steps=int(cfg.opsd.rollout.num_inference_steps),
+                        sigma_shift=float(cfg.opsd.rollout.sigma_shift),
+                        seed=int(cfg.opsd.rollout.inference_seed),
+                        rand_device=str(cfg.opsd.rollout.rand_device),
+                        compile_action_infer=bool(cfg.opsd.rollout.compile_action_infer),
+                    )
+                    validate_trace_against_scheduler(base_model, trajectory)
 
-                provider = build_teacher_input_provider(
-                    OmegaConf.to_container(cfg.teacher_input, resolve=True),
-                    image_encoder=encode_privileged,
-                )
-                teacher_conditioning = provider.build(
-                    TeacherInputContext(
-                        paired_observation=paired,
+                    def encode_privileged(privileged_obs: object) -> torch.Tensor:
+                        image, _, _ = _obs_to_model_input(
+                            obs=privileged_obs,
+                            cfg=cfg,
+                            processor=processor,
+                            width=video_w,
+                            height=video_h,
+                            device=str(accelerator.device),
+                            dtype=model_dtype,
+                        )
+                        return image
+
+                    provider = build_teacher_input_provider(
+                        OmegaConf.to_container(cfg.teacher_input, resolve=True),
+                        image_encoder=encode_privileged,
+                    )
+                    teacher_conditioning = provider.build(
+                        TeacherInputContext(
+                            paired_observation=paired,
+                            student_conditioning=student_conditioning,
+                            student_trajectory=trajectory,
+                            extras={"suite": suite_name, "task_id": task_id},
+                        )
+                    )
+                    metrics = trainer.train_trajectory(
                         student_conditioning=student_conditioning,
-                        student_trajectory=trajectory,
-                        extras={"suite": suite_name, "task_id": task_id},
+                        teacher_conditioning=teacher_conditioning,
+                        trajectory=trajectory,
                     )
-                )
-                metrics = trainer.train_trajectory(
-                    student_conditioning=student_conditioning,
-                    teacher_conditioning=teacher_conditioning,
-                    trajectory=trajectory,
-                )
-                record = {
-                    "global_step": trainer.global_step,
-                    "rollout_index": trainer.rollout_index,
-                    "suite": suite_name,
-                    "task_id": task_id,
-                    "rollout_in_task": rollout_in_task,
-                    "faults": pipeline.metadata()["faults"],
-                    **metrics,
-                }
-                with metrics_path.open("a", encoding="utf-8") as stream:
-                    stream.write(json.dumps(record) + "\n")
+                    record = {
+                        "epoch": epoch_index + 1,
+                        "global_step": trainer.global_step,
+                        "rollout_index": trainer.rollout_index,
+                        "suite": suite_name,
+                        "task_id": task_id,
+                        "rollout_in_task": rollout_in_task,
+                        "faults": pipeline.metadata()["faults"],
+                        **metrics,
+                    }
+                    with metrics_path.open("a", encoding="utf-8") as stream:
+                        stream.write(json.dumps(record) + "\n")
 
-                normalized_action = trajectory.final_action
-                action = _denormalize_action(normalized_action, processor)[0]
-                action[..., -1] = action[..., -1] * 2 - 1
-                action = invert_gripper_action(action)
-                if bool(cfg.opsd.rollout.binarize_gripper):
-                    action[..., -1] = np.sign(action[..., -1])
-                raw_obs, obs, done, taken = _execute_action_chunk(
-                    env=env,
-                    pipeline=pipeline,
-                    raw_observation=raw_obs,
-                    student_observation=obs,
-                    action_chunk=action[: int(cfg.opsd.rollout.replan_steps)],
-                    episode_index=episode_index,
-                    start_step=env_step,
-                )
-                env_step += taken
-                completed_local_rollouts += 1
-                if done and rollout_in_task + 1 < rollouts_per_task:
-                    episode_index += 1
-                    context = pipeline.context(episode_index, 0)
-                    env.reset()
-                    pipeline.on_reset(env, context)
-                    raw_obs = env.set_init_state(
-                        initial_states[episode_index % len(initial_states)]
+                    normalized_action = trajectory.final_action
+                    action = _denormalize_action(normalized_action, processor)[0]
+                    action[..., -1] = action[..., -1] * 2 - 1
+                    action = invert_gripper_action(action)
+                    if bool(cfg.opsd.rollout.binarize_gripper):
+                        action[..., -1] = np.sign(action[..., -1])
+                    raw_obs, obs, done, taken = _execute_action_chunk(
+                        env=env,
+                        pipeline=pipeline,
+                        raw_observation=raw_obs,
+                        student_observation=obs,
+                        action_chunk=action[: int(cfg.opsd.rollout.replan_steps)],
+                        episode_index=episode_index,
+                        start_step=env_step,
                     )
-                    obs = pipeline.transform_observation(raw_obs, env, context)
-                    env_step = 0
-        finally:
-            pipeline.detach(env)
-            close_fn = getattr(env, "close", None)
-            if close_fn is not None:
-                close_fn()
+                    env_step += taken
+                    if done and rollout_in_task + 1 < rollouts_per_task:
+                        episode_index += 1
+                        context = pipeline.context(episode_index, 0)
+                        env.reset()
+                        pipeline.on_reset(env, context)
+                        raw_obs = env.set_init_state(
+                            initial_states[episode_index % len(initial_states)]
+                        )
+                        obs = pipeline.transform_observation(raw_obs, env, context)
+                        env_step = 0
+            finally:
+                pipeline.detach(env)
+                close_fn = getattr(env, "close", None)
+                if close_fn is not None:
+                    close_fn()
 
-        accelerator.wait_for_everyone()
-        save_every = int(cfg.save_every)
-        before_final_task = local_task_index + 1 < len(local_tasks)
-        if (
-            save_every > 0
-            and trainer.global_step > 0
-            and trainer.global_step % save_every == 0
-            and before_final_task
-        ):
-            trainer.save_checkpoint(output_dir, config_hash=config_hash, fault_state={})
+            accelerator.wait_for_everyone()
+            save_every = int(cfg.save_every)
+            before_final_task = local_task_index + 1 < len(local_tasks)
+            if (
+                save_every > 0
+                and trainer.global_step > 0
+                and trainer.global_step % save_every == 0
+                and before_final_task
+            ):
+                trainer.save_checkpoint(output_dir, config_hash=config_hash, fault_state={})
+                trainer.prune_checkpoints(output_dir, keep=int(cfg.max_checkpoints))
 
-    trainer.epoch = 1
-    trainer.save_checkpoint(output_dir, config_hash=config_hash, fault_state={})
-    logging.info("Completed one OPSD epoch at global step %d.", trainer.global_step)
+        trainer.epoch = epoch_index + 1
+        trainer.save_checkpoint(output_dir, config_hash=config_hash, fault_state={})
+        trainer.prune_checkpoints(output_dir, keep=int(cfg.max_checkpoints))
+        logging.info(
+            "Completed OPSD epoch %d/%d at global step %d.",
+            trainer.epoch,
+            int(cfg.opsd.num_epochs),
+            trainer.global_step,
+        )
+        resume_task_offset = 0

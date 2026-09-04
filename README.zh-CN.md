@@ -268,7 +268,7 @@ Teacher 仅用特权条件评价这条 Student 轨迹上的每一个 latent。
 | `src/resilient/opsd/model_adapter.py` | 使用 Fast-WAM 动作向量场评价 Student latent，不调用 scheduler step |
 | `src/resilient/opsd/losses.py` | 逐坐标裁剪的 flow-matching 损失 |
 | `src/resilient/opsd/trainer.py` | 限制显存的逐步打分、多卡梯度更新与断点恢复 |
-| `configs/opsd/fastwam_libero.yaml` | 单 epoch 算法与运行参数 |
+| `configs/opsd/fastwam_libero.yaml` | 多 epoch 参数（默认 1 epoch） |
 | `scripts/resilient/train_opsd.sh` | 严格限制为 4/8 卡的 Accelerate 启动器 |
 
 Fast-WAM 原训练冻结 VAE/text encoder，训练两个 MoT expert 及 proprio encoder。OPSD 会冻结
@@ -300,11 +300,13 @@ Fast-WAM 原训练冻结 VAE/text encoder，训练两个 MoT expert 及 proprio 
 python scripts/resilient/train_opsd.py opsd.validate_only=true
 ```
 
-GPU 空闲后，分别用 4 卡或 8 卡启动配置中的单个 epoch：
+GPU 空闲后，用 4 卡或 8 卡启动训练。默认仍为 1 epoch；长训练需显式覆盖
+`opsd.num_epochs`：
 
 ```bash
 bash scripts/resilient/train_opsd.sh 4
 bash scripts/resilient/train_opsd.sh 8 output_dir=runs/opsd/my_run
+bash scripts/resilient/train_opsd.sh 4 opsd.num_epochs=20 max_checkpoints=1
 ```
 
 如需选择非默认物理卡，使用 `CUDA_VISIBLE_DEVICES`，例如
@@ -320,6 +322,9 @@ Teacher 输入位于 `configs/teacher_input/`，优化和 rollout 参数位于
 `resume=runs/opsd/my_run/checkpoints/state/step_XXXXXXXX`，或在显式复用同一输出目录时使用
 `resume=auto`。恢复点必须处于完整 task 边界，且解析后的配置哈希必须一致。训练状态、LoRA
 checkpoint、指标和来源记录均写入被忽略的 `runs/`。
+每个 epoch 完整遍历 40 个标准 task 一次，并在 epoch 边界保存完整可恢复状态。
+`max_checkpoints` 默认为 2，只会在新状态安全写完后删除更旧状态；参考环境中每个 ZeRO 状态
+约占 50 GB，因此长训练应按磁盘空间设置保留数量。
 
 参考硬件仍为 Linux、8×NVIDIA RTX 6000 Ada 48 GB、CUDA 12.8 和 bf16；默认支持 4 卡与 8
 卡。由于尚未正式运行或计时 OPSD 训练，目前不声明其最终峰值显存需求。本阶段已验证 CPU

@@ -20,7 +20,7 @@ from resilient.opsd.adapters import (
 )
 from resilient.opsd.losses import opsd_flow_loss
 from resilient.opsd.teacher_inputs import TeacherInputContext, build_teacher_input_provider
-from resilient.opsd.trainer import _scalar_to_float
+from resilient.opsd.trainer import OPSDFlowTrainer, _scalar_to_float
 from resilient.opsd.types import ActionConditioning, StudentTrajectory
 
 
@@ -36,15 +36,36 @@ class _ToyFastWAM(nn.Module):
         self.mot.action_expert = self.action_expert
 
     def forward(self, video, action, proprio):
-        return self.video_expert(video) + self.proprio_encoder(proprio), self.action_expert(
-            action
-        )
+        return self.video_expert(video) + self.proprio_encoder(proprio), self.action_expert(action)
 
 
 class OPSDLossTests(unittest.TestCase):
     def test_scalar_metric_accepts_tensor_and_deepspeed_float(self) -> None:
         self.assertEqual(_scalar_to_float(torch.tensor(1.25, requires_grad=True)), 1.25)
         self.assertEqual(_scalar_to_float(2.5), 2.5)
+
+    def test_checkpoint_retention_keeps_newest_completed_states(self) -> None:
+        import tempfile
+        from pathlib import Path
+
+        class _Accelerator:
+            is_main_process = True
+
+            @staticmethod
+            def wait_for_everyone() -> None:
+                return None
+
+        trainer = OPSDFlowTrainer.__new__(OPSDFlowTrainer)
+        trainer.accelerator = _Accelerator()
+        with tempfile.TemporaryDirectory() as directory:
+            state_root = Path(directory) / "checkpoints" / "state"
+            for step in (4, 8, 12):
+                (state_root / f"step_{step:08d}").mkdir(parents=True)
+            trainer.prune_checkpoints(Path(directory), keep=2)
+            self.assertEqual(
+                sorted(path.name for path in state_root.iterdir()),
+                ["step_00000008", "step_00000012"],
+            )
 
     def test_weighted_student_trajectory_loss_and_teacher_detach(self) -> None:
         student = torch.zeros((1, 2, 1, 1), requires_grad=True)
@@ -59,9 +80,7 @@ class OPSDLossTests(unittest.TestCase):
     def test_pointwise_clipping_caps_each_coordinate(self) -> None:
         student = torch.zeros((1, 1, 1, 2))
         teacher = torch.tensor([[[[1.0, 2.0]]]])
-        loss, metrics = opsd_flow_loss(
-            student, teacher, torch.tensor([1.0]), pointwise_clip=0.05
-        )
+        loss, metrics = opsd_flow_loss(student, teacher, torch.tensor([1.0]), pointwise_clip=0.05)
         self.assertAlmostEqual(float(loss), 0.05)
         self.assertAlmostEqual(float(metrics["clip_fraction"]), 1.0)
 
@@ -79,9 +98,7 @@ class FastWAMLoraTests(unittest.TestCase):
 
     def test_injection_freezes_base_and_teacher_can_disable_lora(self) -> None:
         model = _ToyFastWAM()
-        audit = inject_fastwam_aligned_lora(
-            model, FastWAMLoraConfig(rank=2, alpha=4)
-        )
+        audit = inject_fastwam_aligned_lora(model, FastWAMLoraConfig(rank=2, alpha=4))
         self.assertGreater(audit["trainable_parameters"], 0)
         self.assertTrue(
             all(
@@ -99,9 +116,7 @@ class FastWAMLoraTests(unittest.TestCase):
             teacher_output = model(*inputs)
         self.assertFalse(torch.allclose(student_output[0], teacher_output[0]))
         self.assertFalse(torch.allclose(student_output[1], teacher_output[1]))
-        self.assertTrue(
-            all(not name.startswith("mot.") for name in adapter_state_dict(model))
-        )
+        self.assertTrue(all(not name.startswith("mot.") for name in adapter_state_dict(model)))
 
     def test_saved_adapter_round_trip(self) -> None:
         import tempfile
@@ -129,9 +144,7 @@ class TeacherAndTraceTests(unittest.TestCase):
         student_image = torch.zeros(1, 3, 2, 2)
         clean_image = torch.ones(1, 3, 2, 2)
         proprio = torch.tensor([[0.2, 0.4]])
-        student = ActionConditioning(
-            input_image=student_image, prompt="task", proprio=proprio
-        )
+        student = ActionConditioning(input_image=student_image, prompt="task", proprio=proprio)
         trajectory = StudentTrajectory.from_inference_result(
             {
                 "action": torch.zeros(1, 2),
@@ -149,18 +162,14 @@ class TeacherAndTraceTests(unittest.TestCase):
         provider = build_teacher_input_provider(
             {"type": "clean_visual"}, image_encoder=lambda observation: clean_image
         )
-        teacher = provider.build(
-            TeacherInputContext(paired, student, trajectory, extras={})
-        )
+        teacher = provider.build(TeacherInputContext(paired, student, trajectory, extras={}))
         self.assertIs(teacher.input_image, clean_image)
         self.assertEqual(teacher.prompt, student.prompt)
         self.assertIs(teacher.proprio, proprio)
         self.assertIs(teacher.context, student.context)
 
     def test_fastwam_trace_switch_is_default_off(self) -> None:
-        parameter = inspect.signature(FastWAM.infer_action).parameters[
-            "return_denoising_trace"
-        ]
+        parameter = inspect.signature(FastWAM.infer_action).parameters["return_denoising_trace"]
         self.assertIs(parameter.default, False)
 
 

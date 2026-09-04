@@ -276,7 +276,7 @@ The main components are:
 | `src/resilient/opsd/model_adapter.py` | Score a Student latent with Fast-WAM's action vector field, without a scheduler step |
 | `src/resilient/opsd/losses.py` | Per-coordinate clipped flow-matching objective |
 | `src/resilient/opsd/trainer.py` | Memory-bounded scoring, distributed gradient update, and resume state |
-| `configs/opsd/fastwam_libero.yaml` | One-epoch algorithm/runtime parameters |
+| `configs/opsd/fastwam_libero.yaml` | Multi-epoch parameters (default: one epoch) |
 | `scripts/resilient/train_opsd.sh` | Strict 4/8-GPU Accelerate launcher |
 
 Fast-WAM training freezes the VAE/text encoder, trains both MoT experts, and trains the proprio
@@ -312,11 +312,13 @@ First perform the no-CUDA configuration smoke check:
 python scripts/resilient/train_opsd.py opsd.validate_only=true
 ```
 
-When GPUs are available, start the single configured epoch on four or eight GPUs:
+When GPUs are available, start training on four or eight GPUs. The default remains one epoch;
+override `opsd.num_epochs` explicitly for longer runs:
 
 ```bash
 bash scripts/resilient/train_opsd.sh 4
 bash scripts/resilient/train_opsd.sh 8 output_dir=runs/opsd/my_run
+bash scripts/resilient/train_opsd.sh 4 opsd.num_epochs=20 max_checkpoints=1
 ```
 
 Select non-default physical devices through `CUDA_VISIBLE_DEVICES`, for example
@@ -333,6 +335,9 @@ under `configs/opsd/fastwam_libero.yaml`. Override `ckpt`, `opsd.dataset_stats_p
 explicit output directory. Resume is accepted only at completed task boundaries and rejects a
 resolved-config hash mismatch. Raw training state, adapter checkpoints, metrics, and provenance
 remain under ignored `runs/`.
+Each epoch visits all 40 standard tasks once and writes a complete resumable state at its boundary.
+`max_checkpoints` (default 2) removes older states only after a new state is safely written. This
+matters because one reference ZeRO state occupies approximately 50 GB.
 
 The reference hardware remains Linux, 8 x NVIDIA RTX 6000 Ada 48 GB, CUDA 12.8, and bf16. Four-
 and eight-GPU execution are the supported defaults; full OPSD training has not yet been run or

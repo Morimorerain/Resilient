@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -143,6 +144,18 @@ class OPSDFlowTrainer:
             )
         self.accelerator.wait_for_everyone()
         return state_dir
+
+    def prune_checkpoints(self, output_dir: Path, *, keep: int) -> None:
+        """Keep only the newest completed checkpoints after all ranks finish saving."""
+        if keep <= 0:
+            raise ValueError("Checkpoint retention must be positive.")
+        self.accelerator.wait_for_everyone()
+        if self.accelerator.is_main_process:
+            state_root = output_dir / "checkpoints" / "state"
+            checkpoints = sorted(state_root.glob("step_*"))
+            for stale in checkpoints[:-keep]:
+                shutil.rmtree(stale)
+        self.accelerator.wait_for_everyone()
 
     def load_checkpoint(self, state_dir: Path, *, config_hash: str) -> dict[str, Any]:
         """Restore optimizer/RNG and reject configuration drift."""
