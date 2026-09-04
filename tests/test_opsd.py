@@ -19,6 +19,7 @@ from resilient.opsd.adapters import (
     lora_disabled,
 )
 from resilient.opsd.losses import opsd_flow_loss
+from resilient.opsd.runtime import build_rollout_schedule
 from resilient.opsd.teacher_inputs import TeacherInputContext, build_teacher_input_provider
 from resilient.opsd.trainer import OPSDFlowTrainer, _scalar_to_float
 from resilient.opsd.types import ActionConditioning, StudentTrajectory
@@ -40,6 +41,38 @@ class _ToyFastWAM(nn.Module):
 
 
 class OPSDLossTests(unittest.TestCase):
+    def test_rollout_schedule_is_shuffled_balanced_and_reproducible(self) -> None:
+        kwargs = {
+            "suites": ["suite_a", "suite_b"],
+            "tasks_per_suite": 2,
+            "rollouts_per_task": 3,
+            "epoch": 0,
+            "schedule_seed": 42,
+            "environment_seed": 42,
+            "inference_seed": 42,
+        }
+        first = build_rollout_schedule(**kwargs)
+        second = build_rollout_schedule(**kwargs)
+        self.assertEqual(first, second)
+        self.assertEqual(len(first), 12)
+        ordered = [
+            (suite, task_id, rollout_id)
+            for suite in kwargs["suites"]
+            for task_id in range(2)
+            for rollout_id in range(3)
+        ]
+        self.assertNotEqual(
+            [(item.suite, item.task_id, item.rollout_id) for item in first], ordered
+        )
+        self.assertEqual(len({item.environment_seed for item in first}), 12)
+        self.assertEqual(len({item.inference_seed for item in first}), 12)
+        for suite in kwargs["suites"]:
+            for task_id in range(2):
+                selected = [
+                    item for item in first if item.suite == suite and item.task_id == task_id
+                ]
+                self.assertEqual({item.initial_state_index for item in selected}, {0, 1, 2})
+
     def test_scalar_metric_accepts_tensor_and_deepspeed_float(self) -> None:
         self.assertEqual(_scalar_to_float(torch.tensor(1.25, requires_grad=True)), 1.25)
         self.assertEqual(_scalar_to_float(2.5), 2.5)
@@ -108,7 +141,7 @@ class FastWAMLoraTests(unittest.TestCase):
             )
         )
         for name, parameter in model.named_parameters():
-            if ".lora_B." in name:
+            if ".lora_A." in name or ".lora_B." in name:
                 nn.init.constant_(parameter, 0.25)
         inputs = (torch.ones(1, 4), torch.ones(1, 4), torch.ones(1, 2))
         student_output = model(*inputs)

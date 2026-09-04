@@ -312,7 +312,8 @@ First perform the no-CUDA configuration smoke check:
 python scripts/resilient/train_opsd.py opsd.validate_only=true
 ```
 
-When GPUs are available, start training on four or eight GPUs. The default remains one epoch;
+When GPUs are available, start training on four or eight GPUs. The default is one epoch with 50
+independently reset trajectories per task (2,000 trajectories total);
 override `opsd.num_epochs` explicitly for longer runs:
 
 ```bash
@@ -332,10 +333,13 @@ All parameters remain in YAML: fault and severity under `configs/fault/`, LoRA u
 under `configs/opsd/fastwam_libero.yaml`. Override `ckpt`, `opsd.dataset_stats_path`, and
 `output_dir` with repository-relative paths as needed. Resume with
 `resume=runs/opsd/my_run/checkpoints/state/step_XXXXXXXX` or `resume=auto` while reusing the same
-explicit output directory. Resume is accepted only at completed task boundaries and rejects a
-resolved-config hash mismatch. Raw training state, adapter checkpoints, metrics, and provenance
-remain under ignored `runs/`.
-Each epoch visits all 40 standard tasks once and writes a complete resumable state at its boundary.
+explicit output directory. The runtime creates immutable `(suite, task, rollout, initial-state,
+environment-seed, inference-seed)` descriptors, deterministically shuffles the global schedule,
+then assigns it to ranks by striding. Each task uses LIBERO initial states 0--49 exactly once.
+Seeds derive from descriptor identity rather than execution order, so resumed samples are exact.
+Resume is accepted at completed trajectory boundaries and rejects a resolved-config hash mismatch.
+Raw training state, adapter checkpoints, metrics, and provenance remain under ignored `runs/`.
+Each epoch visits all 40 standard tasks 50 times and writes a complete resumable state at its boundary.
 `max_checkpoints` (default 2) removes older states only after a new state is safely written. This
 matters because one reference ZeRO state occupies approximately 50 GB.
 

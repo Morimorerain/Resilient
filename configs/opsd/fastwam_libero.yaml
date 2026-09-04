@@ -26,7 +26,7 @@ lr_warmup_ratio: 0.05
 max_grad_norm: 0.1
 mixed_precision: bf16
 gradient_accumulation_steps: 1
-save_every: 4
+save_every: 100
 max_checkpoints: 2
 
 opsd:
@@ -42,7 +42,9 @@ opsd:
     step_weighting: normalized_abs_delta_sigma
   rollout:
     suites: [libero_spatial, libero_object, libero_goal, libero_10]
-    rollouts_per_task: 1
+    # One epoch contains 40 tasks x 50 distinct LIBERO initial states.
+    rollouts_per_task: 50
+    schedule_seed: ${seed}
     environment_seed: ${seed}
     inference_seed: ${seed}
     num_steps_wait: 30

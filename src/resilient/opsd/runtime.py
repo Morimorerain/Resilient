@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import math
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +42,61 @@ from .rollout import generate_student_trajectory, validate_trace_against_schedul
 from .teacher_inputs import TeacherInputContext, build_teacher_input_provider
 from .trainer import OPSDFlowTrainer
 from .types import ActionConditioning
+
+
+@dataclass(frozen=True)
+class RolloutDescriptor:
+    """Identity of one reproducible, independently reset OPSD training sample."""
+
+    suite: str
+    task_id: int
+    rollout_id: int
+    initial_state_index: int
+    environment_seed: int
+    inference_seed: int
+    sample_id: int
+
+
+def _derive_seed(base_seed: int, *identity: object) -> int:
+    """Derive a stable non-negative seed without depending on Python's hash salt."""
+    encoded = ":".join([str(base_seed), *(str(value) for value in identity)]).encode()
+    return int.from_bytes(hashlib.sha256(encoded).digest()[:8], "big") % (2**31)
+
+
+def build_rollout_schedule(
+    *,
+    suites: list[str],
+    tasks_per_suite: int,
+    rollouts_per_task: int,
+    epoch: int,
+    schedule_seed: int,
+    environment_seed: int,
+    inference_seed: int,
+) -> list[RolloutDescriptor]:
+    """Build and deterministically shuffle the global schedule for one epoch."""
+    descriptors: list[RolloutDescriptor] = []
+    for suite_index, suite_name in enumerate(suites):
+        for task_id in range(tasks_per_suite):
+            for rollout_id in range(rollouts_per_task):
+                sample_id = (
+                    (suite_index * tasks_per_suite + task_id) * rollouts_per_task + rollout_id
+                )
+                identity = (epoch, suite_name, task_id, rollout_id)
+                descriptors.append(
+                    RolloutDescriptor(
+                        suite=suite_name,
+                        task_id=task_id,
+                        rollout_id=rollout_id,
+                        initial_state_index=rollout_id,
+                        environment_seed=_derive_seed(environment_seed, *identity, "environment"),
+                        inference_seed=_derive_seed(inference_seed, *identity, "inference"),
+                        sample_id=sample_id,
+                    )
+                )
+    generator = torch.Generator(device="cpu")
+    generator.manual_seed(int(schedule_seed) + int(epoch))
+    permutation = torch.randperm(len(descriptors), generator=generator).tolist()
+    return [descriptors[index] for index in permutation]
 
 
 def resolved_config_hash(cfg: DictConfig) -> str:
@@ -90,6 +146,9 @@ def validate_opsd_config(cfg: DictConfig, *, world_size: int | None = None) -> d
     local_rollouts = (
         len(opsd.rollout.suites) * 10 * int(opsd.rollout.rollouts_per_task) // requested_gpus
     )
+    total_rollouts = len(opsd.rollout.suites) * 10 * int(opsd.rollout.rollouts_per_task)
+    if total_rollouts % requested_gpus != 0:
+        raise ValueError("The global rollout schedule must divide evenly across ranks.")
     accumulation = int(cfg.gradient_accumulation_steps)
     if accumulation <= 0 or local_rollouts % accumulation != 0:
         raise ValueError(
@@ -116,6 +175,9 @@ def validate_opsd_config(cfg: DictConfig, *, world_size: int | None = None) -> d
         "lr_scheduler_type": str(cfg.lr_scheduler_type),
         "lr_warmup_ratio": float(cfg.lr_warmup_ratio),
         "num_epochs": int(opsd.num_epochs),
+        "rollouts_per_task": int(opsd.rollout.rollouts_per_task),
+        "schedule_seed": int(opsd.rollout.schedule_seed),
+        "schedule_policy": "global_deterministic_shuffle_then_rank_stride",
         "max_checkpoints": int(cfg.max_checkpoints),
     }
 
@@ -269,48 +331,59 @@ def run_opsd_training(cfg: DictConfig) -> None:
     processor.set_normalizer_from_stats(dataset_stats)
     video_h, video_w = (int(value) for value in cfg.data.train.video_size)
     suites = [str(value) for value in cfg.opsd.rollout.suites]
-    all_tasks = [(suite, task_id) for suite in suites for task_id in range(10)]
-    if len(all_tasks) % accelerator.num_processes != 0:
-        raise ValueError("Task count must divide evenly across distributed ranks.")
-    local_tasks = all_tasks[accelerator.process_index :: accelerator.num_processes]
     rollouts_per_task = int(cfg.opsd.rollout.rollouts_per_task)
-    if trainer.rollout_index % rollouts_per_task != 0:
-        raise ValueError("Resume checkpoints must be written at a complete task boundary.")
-    local_rollouts_per_epoch = len(local_tasks) * rollouts_per_task
+    global_rollouts_per_epoch = len(suites) * 10 * rollouts_per_task
+    local_rollouts_per_epoch = global_rollouts_per_epoch // accelerator.num_processes
     completed_before_epoch = trainer.epoch * local_rollouts_per_epoch
     completed_in_resume_epoch = trainer.rollout_index - completed_before_epoch
     if not 0 <= completed_in_resume_epoch <= local_rollouts_per_epoch:
         raise ValueError(
             "Resume checkpoint epoch and rollout_index are inconsistent with this world size."
         )
-    if completed_in_resume_epoch % rollouts_per_task != 0:
-        raise ValueError("Resume checkpoints must be written at a complete task boundary.")
-    resume_task_offset = completed_in_resume_epoch // rollouts_per_task
+    resume_rollout_offset = completed_in_resume_epoch
     resume_epoch = trainer.epoch
     metrics_path = output_dir / f"metrics_rank_{accelerator.process_index:02d}.jsonl"
 
     for epoch_index in range(resume_epoch, int(cfg.opsd.num_epochs)):
-        task_offset = resume_task_offset if epoch_index == resume_epoch else 0
-        for local_task_index, (suite_name, task_id) in enumerate(local_tasks):
-            if local_task_index < task_offset:
+        global_schedule = build_rollout_schedule(
+            suites=suites,
+            tasks_per_suite=10,
+            rollouts_per_task=rollouts_per_task,
+            epoch=epoch_index,
+            schedule_seed=int(cfg.opsd.rollout.schedule_seed),
+            environment_seed=int(cfg.opsd.rollout.environment_seed),
+            inference_seed=int(cfg.opsd.rollout.inference_seed),
+        )
+        local_schedule = global_schedule[
+            accelerator.process_index :: accelerator.num_processes
+        ]
+        rollout_offset = resume_rollout_offset if epoch_index == resume_epoch else 0
+        for local_rollout_index, descriptor in enumerate(local_schedule):
+            if local_rollout_index < rollout_offset:
                 continue
+            suite_name, task_id = descriptor.suite, descriptor.task_id
             suite = benchmark.get_benchmark_dict()[suite_name]()
             task = suite.get_task(task_id)
             states_path = (
                 Path(get_libero_path("init_states")) / task.problem_folder / task.init_states_file
             )
             initial_states = torch.load(states_path, weights_only=False)
+            if len(initial_states) < rollouts_per_task:
+                raise ValueError(
+                    f"{suite_name} task {task_id} has {len(initial_states)} initial states, "
+                    f"but {rollouts_per_task} distinct states were requested."
+                )
             env, task_description = get_libero_env(
-                task, LIBERO_ENV_RESOLUTION, int(cfg.opsd.rollout.environment_seed)
+                task, LIBERO_ENV_RESOLUTION, descriptor.environment_seed
             )
             fault_cfg = OmegaConf.to_container(cfg.fault, resolve=True)
             pipeline = build_fault_pipeline(fault_cfg)
-            episode_index = epoch_index * len(local_tasks) + local_task_index
+            episode_index = epoch_index * global_rollouts_per_epoch + descriptor.sample_id
             context = pipeline.context(episode_index, 0)
             try:
                 env.reset()
                 pipeline.on_reset(env, context)
-                raw_obs = env.set_init_state(initial_states[0])
+                raw_obs = env.set_init_state(initial_states[descriptor.initial_state_index])
                 obs = pipeline.transform_observation(raw_obs, env, context)
                 env_step = 0
                 for _ in range(int(cfg.opsd.rollout.num_steps_wait)):
@@ -327,15 +400,43 @@ def run_opsd_training(cfg: DictConfig) -> None:
                     if done:
                         raise RuntimeError("LIBERO task terminated during the warm-up period.")
 
-                for rollout_in_task in range(rollouts_per_task):
-                    paired = capture_paired_observation(
-                        env=env,
-                        pipeline=pipeline,
-                        capture_raw_observation=lambda: _capture_current_observation(env),
-                        context=pipeline.context(episode_index, env_step),
-                    )
-                    student_image, student_proprio, _ = _obs_to_model_input(
-                        obs=paired.student,
+                paired = capture_paired_observation(
+                    env=env,
+                    pipeline=pipeline,
+                    capture_raw_observation=lambda: _capture_current_observation(env),
+                    context=pipeline.context(episode_index, env_step),
+                )
+                student_image, student_proprio, _ = _obs_to_model_input(
+                    obs=paired.student,
+                    cfg=cfg,
+                    processor=processor,
+                    width=video_w,
+                    height=video_h,
+                    device=str(accelerator.device),
+                    dtype=model_dtype,
+                )
+                prompt = DEFAULT_PROMPT.format(task=task_description)
+                student_conditioning = ActionConditioning(
+                    input_image=student_image,
+                    prompt=prompt,
+                    proprio=student_proprio,
+                )
+                base_model = trainer.fastwam
+                trajectory = generate_student_trajectory(
+                    base_model,
+                    student_conditioning,
+                    action_horizon=int(cfg.opsd.rollout.action_horizon),
+                    num_inference_steps=int(cfg.opsd.rollout.num_inference_steps),
+                    sigma_shift=float(cfg.opsd.rollout.sigma_shift),
+                    seed=descriptor.inference_seed,
+                    rand_device=str(cfg.opsd.rollout.rand_device),
+                    compile_action_infer=bool(cfg.opsd.rollout.compile_action_infer),
+                )
+                validate_trace_against_scheduler(base_model, trajectory)
+
+                def encode_privileged(privileged_obs: object) -> torch.Tensor:
+                    image, _, _ = _obs_to_model_input(
+                        obs=privileged_obs,
                         cfg=cfg,
                         processor=processor,
                         width=video_w,
@@ -343,93 +444,58 @@ def run_opsd_training(cfg: DictConfig) -> None:
                         device=str(accelerator.device),
                         dtype=model_dtype,
                     )
-                    prompt = DEFAULT_PROMPT.format(task=task_description)
-                    student_conditioning = ActionConditioning(
-                        input_image=student_image,
-                        prompt=prompt,
-                        proprio=student_proprio,
-                    )
-                    base_model = trainer.fastwam
-                    trajectory = generate_student_trajectory(
-                        base_model,
-                        student_conditioning,
-                        action_horizon=int(cfg.opsd.rollout.action_horizon),
-                        num_inference_steps=int(cfg.opsd.rollout.num_inference_steps),
-                        sigma_shift=float(cfg.opsd.rollout.sigma_shift),
-                        seed=int(cfg.opsd.rollout.inference_seed),
-                        rand_device=str(cfg.opsd.rollout.rand_device),
-                        compile_action_infer=bool(cfg.opsd.rollout.compile_action_infer),
-                    )
-                    validate_trace_against_scheduler(base_model, trajectory)
+                    return image
 
-                    def encode_privileged(privileged_obs: object) -> torch.Tensor:
-                        image, _, _ = _obs_to_model_input(
-                            obs=privileged_obs,
-                            cfg=cfg,
-                            processor=processor,
-                            width=video_w,
-                            height=video_h,
-                            device=str(accelerator.device),
-                            dtype=model_dtype,
-                        )
-                        return image
-
-                    provider = build_teacher_input_provider(
-                        OmegaConf.to_container(cfg.teacher_input, resolve=True),
-                        image_encoder=encode_privileged,
-                    )
-                    teacher_conditioning = provider.build(
-                        TeacherInputContext(
-                            paired_observation=paired,
-                            student_conditioning=student_conditioning,
-                            student_trajectory=trajectory,
-                            extras={"suite": suite_name, "task_id": task_id},
-                        )
-                    )
-                    metrics = trainer.train_trajectory(
+                provider = build_teacher_input_provider(
+                    OmegaConf.to_container(cfg.teacher_input, resolve=True),
+                    image_encoder=encode_privileged,
+                )
+                teacher_conditioning = provider.build(
+                    TeacherInputContext(
+                        paired_observation=paired,
                         student_conditioning=student_conditioning,
-                        teacher_conditioning=teacher_conditioning,
-                        trajectory=trajectory,
+                        student_trajectory=trajectory,
+                        extras={"suite": suite_name, "task_id": task_id},
                     )
-                    record = {
-                        "epoch": epoch_index + 1,
-                        "global_step": trainer.global_step,
-                        "rollout_index": trainer.rollout_index,
-                        "suite": suite_name,
-                        "task_id": task_id,
-                        "rollout_in_task": rollout_in_task,
-                        "faults": pipeline.metadata()["faults"],
-                        **metrics,
-                    }
-                    with metrics_path.open("a", encoding="utf-8") as stream:
-                        stream.write(json.dumps(record) + "\n")
+                )
+                metrics = trainer.train_trajectory(
+                    student_conditioning=student_conditioning,
+                    teacher_conditioning=teacher_conditioning,
+                    trajectory=trajectory,
+                )
+                record = {
+                    "epoch": epoch_index + 1,
+                    "global_step": trainer.global_step,
+                    "rollout_index": trainer.rollout_index,
+                    "suite": suite_name,
+                    "task_id": task_id,
+                    "rollout_in_task": descriptor.rollout_id,
+                    "initial_state_index": descriptor.initial_state_index,
+                    "environment_seed": descriptor.environment_seed,
+                    "inference_seed": descriptor.inference_seed,
+                    "sample_id": descriptor.sample_id,
+                    "faults": pipeline.metadata()["faults"],
+                    **metrics,
+                }
+                with metrics_path.open("a", encoding="utf-8") as stream:
+                    stream.write(json.dumps(record) + "\n")
 
-                    normalized_action = trajectory.final_action
-                    action = _denormalize_action(normalized_action, processor)[0]
-                    action[..., -1] = action[..., -1] * 2 - 1
-                    action = invert_gripper_action(action)
-                    if bool(cfg.opsd.rollout.binarize_gripper):
-                        action[..., -1] = np.sign(action[..., -1])
-                    raw_obs, obs, done, taken = _execute_action_chunk(
-                        env=env,
-                        pipeline=pipeline,
-                        raw_observation=raw_obs,
-                        student_observation=obs,
-                        action_chunk=action[: int(cfg.opsd.rollout.replan_steps)],
-                        episode_index=episode_index,
-                        start_step=env_step,
-                    )
-                    env_step += taken
-                    if done and rollout_in_task + 1 < rollouts_per_task:
-                        episode_index += 1
-                        context = pipeline.context(episode_index, 0)
-                        env.reset()
-                        pipeline.on_reset(env, context)
-                        raw_obs = env.set_init_state(
-                            initial_states[episode_index % len(initial_states)]
-                        )
-                        obs = pipeline.transform_observation(raw_obs, env, context)
-                        env_step = 0
+                normalized_action = trajectory.final_action
+                action = _denormalize_action(normalized_action, processor)[0]
+                action[..., -1] = action[..., -1] * 2 - 1
+                action = invert_gripper_action(action)
+                if bool(cfg.opsd.rollout.binarize_gripper):
+                    action[..., -1] = np.sign(action[..., -1])
+                raw_obs, obs, done, taken = _execute_action_chunk(
+                    env=env,
+                    pipeline=pipeline,
+                    raw_observation=raw_obs,
+                    student_observation=obs,
+                    action_chunk=action[: int(cfg.opsd.rollout.replan_steps)],
+                    episode_index=episode_index,
+                    start_step=env_step,
+                )
+                env_step += taken
             finally:
                 pipeline.detach(env)
                 close_fn = getattr(env, "close", None)
@@ -438,12 +504,12 @@ def run_opsd_training(cfg: DictConfig) -> None:
 
             accelerator.wait_for_everyone()
             save_every = int(cfg.save_every)
-            before_final_task = local_task_index + 1 < len(local_tasks)
+            before_final_rollout = local_rollout_index + 1 < len(local_schedule)
             if (
                 save_every > 0
                 and trainer.global_step > 0
                 and trainer.global_step % save_every == 0
-                and before_final_task
+                and before_final_rollout
             ):
                 trainer.save_checkpoint(output_dir, config_hash=config_hash, fault_state={})
                 trainer.prune_checkpoints(output_dir, keep=int(cfg.max_checkpoints))
@@ -457,4 +523,4 @@ def run_opsd_training(cfg: DictConfig) -> None:
             int(cfg.opsd.num_epochs),
             trainer.global_step,
         )
-        resume_task_offset = 0
+        resume_rollout_offset = 0

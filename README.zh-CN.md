@@ -300,7 +300,8 @@ Fast-WAM 原训练冻结 VAE/text encoder，训练两个 MoT expert 及 proprio 
 python scripts/resilient/train_opsd.py opsd.validate_only=true
 ```
 
-GPU 空闲后，用 4 卡或 8 卡启动训练。默认仍为 1 epoch；长训练需显式覆盖
+GPU 空闲后，用 4 卡或 8 卡启动训练。默认是 1 epoch，每个 task 使用 50 条独立重置的
+轨迹（总计 2,000 条）；长训练需显式覆盖
 `opsd.num_epochs`：
 
 ```bash
@@ -320,9 +321,12 @@ Teacher 输入位于 `configs/teacher_input/`，优化和 rollout 参数位于
 `configs/opsd/fastwam_libero.yaml`。按需使用仓库相对路径覆盖 `ckpt`、
 `opsd.dataset_stats_path` 和 `output_dir`。恢复训练时传入
 `resume=runs/opsd/my_run/checkpoints/state/step_XXXXXXXX`，或在显式复用同一输出目录时使用
-`resume=auto`。恢复点必须处于完整 task 边界，且解析后的配置哈希必须一致。训练状态、LoRA
-checkpoint、指标和来源记录均写入被忽略的 `runs/`。
-每个 epoch 完整遍历 40 个标准 task 一次，并在 epoch 边界保存完整可恢复状态。
+`resume=auto`。运行时构造不可变的 `(suite, task, rollout, initial-state,
+environment-seed, inference-seed)` 描述符，对全局序列进行确定性打乱，再按跨步方式分给各
+rank。每个 task 的 LIBERO 初始状态 0--49 恰好各使用一次；seed 由描述符身份而非执行顺序
+派生，因此断点恢复后仍会得到相同样本。恢复点可以位于任意完整轨迹边界，且解析后的配置
+哈希必须一致。训练状态、LoRA checkpoint、指标和来源记录均写入被忽略的 `runs/`。
+每个 epoch 对 40 个标准 task 各训练 50 次，并在 epoch 边界保存完整可恢复状态。
 `max_checkpoints` 默认为 2，只会在新状态安全写完后删除更旧状态；参考环境中每个 ZeRO 状态
 约占 50 GB，因此长训练应按磁盘空间设置保留数量。
 
