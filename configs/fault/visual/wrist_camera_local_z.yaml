@@ -1,0 +1,20 @@
+pipeline:
+  id: wrist_camera_local_z_rotation
+  enabled: true
+  seed: 42
+  faults:
+    - id: wrist_camera_rotation
+      family: visual.camera_pose
+      enabled: true
+      target: robot0_eye_in_hand
+      operation:
+        type: local_axis_rotation
+        axis: z
+        direction: positive
+      severity:
+        name: rotation_angle
+        value: 30.0
+        unit: degree
+        level: severe
+      parameters:
+        position_offset: [0.0, 0.0, 0.0]

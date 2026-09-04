@@ -9,16 +9,19 @@ Resilient is a reproducibility-first research codebase built on [FastWAM](https:
 - FastWAM upstream is pinned to commit `7faa71108368fbb3b6885649f112af607427a2d4`.
 - The baseline target is `libero_uncond_2cam224.pt` with its released dataset statistics.
 - Reproduction uses the original checkpoint setting `EVALUATION.sigma_shift=5.0`.
-- FastWAM core behavior is unchanged. Project-specific code lives under `src/resilient/` and `scripts/resilient/`.
+- FastWAM's default behavior is unchanged; the only core addition is a documented, default-off
+  denoising-trace return switch. Project-specific implementations live under `src/resilient/`.
 - The standalone Python/CUDA stack, all pinned assets, a headless LIBERO EGL reset, the one-episode integration evaluation, and the full 2,000-episode benchmark are validated on the hardware below.
+- The severity-aware Fault layer and OPSD-Flow implementation have reached CPU/configuration/
+  simulator smoke validation; full multi-GPU OPSD training is not yet validated.
 
 ## Repository layout
 
 ```text
 Resilient/
-├── configs/                       # Upstream Hydra configs
-├── experiments/libero/            # Upstream LIBERO evaluation
-├── src/fastwam/                   # Pinned upstream FastWAM implementation
+├── configs/                       # Hydra configs, including Fault/adapter/OPSD parameters
+├── experiments/libero/            # LIBERO evaluation plus a default-off Fault hook
+├── src/fastwam/                   # Pinned FastWAM plus registered default-off patches
 ├── src/resilient/                 # Resilient extensions and adapters
 ├── scripts/resilient/             # Reproducible evaluation/download/verification tools
 ├── environment/                   # Environment specification, lock, and notes
@@ -200,59 +203,116 @@ The run used seed 42, 10 inference steps, sigma shift 5.0, CFG 1.0, action compi
 
 On 2026-09-04, `libero_spatial` task 0 completed successfully in its single episode with seed 42, 10 inference steps, sigma shift 5.0, action compilation enabled, and the released checkpoint. The rollout phase took 114.52 seconds including first-use TorchInductor compilation. See `reports/baselines/minimal-validation.json` for compact provenance. This is an integration check, not a statistically meaningful benchmark result.
 
-## Evaluating camera-pose faults
+## Reusable fault pipeline and evaluation
 
-The tracked `scripts/resilient/evaluate_camera_pose_fault.py` entry point evaluates one
-deterministic camera position/orientation fault through the same persistent-worker FastWAM
-pipeline used by the baseline. For example, rotate the wrist camera by +15 degrees about its
-local X axis and evaluate the four standard suites on GPUs 0--3:
+Fault definitions are model-independent YAML files under `configs/fault/`. A `FaultPipeline`
+orders plugins with reset, observation, action, pre-step, post-step, suspend, checkpoint-state,
+and detach hooks. This supports later image occlusion/contamination, actuator limits, joint-motion
+degradation, and dynamics faults without adding fault-specific branches to Fast-WAM. Every fault
+has a stable `family` and a separate physical `severity` (`name`, numeric `value`, `unit`, and an
+optional categorical `level`), so +10/+20/+30 degree rotations are three severities of the same
+fault family.
+
+The committed camera example is `configs/fault/visual/wrist_camera_local_z.yaml`. Evaluate its
+default +30 degree severity on four GPUs with:
 
 ```bash
-python scripts/resilient/evaluate_camera_pose_fault.py \
-  --camera robot0_eye_in_hand \
-  --position-offset 0.0 0.0 0.0 \
-  --rotation-offset-deg 15.0 0.0 0.0 \
+python scripts/resilient/evaluate_fault.py \
+  --fault-config configs/fault/visual/wrist_camera_local_z.yaml \
   --gpus 0,1,2,3 \
-  --checkpoint ./checkpoints/fastwam_release/libero_uncond_2cam224.pt
+  --checkpoint checkpoints/fastwam_release/libero_uncond_2cam224.pt
 ```
 
-Use `--gpus 0,1,2,3,4,5,6,7` for eight GPUs. Each listed GPU hosts one persistent model worker
-and therefore needs the same approximately 32 GB recommended memory as the baseline. The default
-run is 40 tasks x 50 episodes across `libero_spatial`, `libero_object`, `libero_goal`, and
-`libero_10`; use `--suites` and `--num-trials` for smaller experiments.
+Use `--severity 10`, `--severity 20`, or `--severity 30` to override the one fault's physical
+magnitude without changing its family. Use eight IDs for an eight-worker evaluation. The default
+output root is ignored `evaluate_results/faults/`; a canonical child name includes family, target,
+severity, unit, and checkpoint, for example
+`visual-camera_pose-robot0_eye_in_hand-rotation_angle-p30p0degree__model-libero_uncond_2cam224/`.
+It contains raw task results/videos, `summary.json`, `fault_summary.md`, `fault_manifest.json`, and
+`fault_comparison.png`. The 2 x 2 image uses one simulator state for nominal/faulted third-person
+and wrist images and annotates the faulted panels with the resolved fault metadata.
+Add `--create-only` to validate the comparison render and distributed task configuration without
+loading Fast-WAM or running episodes.
 
-Fault parameter semantics are fixed and recorded in every output manifest:
+For camera pose faults, translation is expressed in metres along the original camera-local axes;
+rotation uses right-handed local X-then-Y-then-Z rotations in degrees. MuJoCo cameras look along
+local `-Z`; local `+X` is raw-image right and local `+Y` is raw-image up. The plugin restores the
+nominal pose temporarily when privileged observations are requested and never advances the
+simulator while making the pair.
 
-- `--camera` accepts `agentview` or `robot0_eye_in_hand`.
-- `--position-offset X Y Z` is in meters along the original local camera X/Y/Z axes. The script
-  converts it into the MuJoCo parent frame, so one offset has consistent physical meaning across
-  suites and tasks.
-- `--rotation-offset-deg X Y Z` applies right-handed rotations about the camera's local axes in
-  X-then-Y-then-Z order. MuJoCo cameras look along local `-Z`; local `+X` is raw-image right and
-  local `+Y` is raw-image up. FastWAM's 180-degree image preprocessing does not change the
-  physical rotation axes.
-- `--checkpoint` selects the model. The script looks for
-  `<checkpoint_stem>_dataset_stats.json` and then `dataset_stats.json` beside it; pass
-  `--dataset-stats` when neither convention applies.
-- `--output-dir` is an output root and defaults to `evaluate_results/camera_pose_faults/`.
-  `--preview-suite`, `--preview-task-id`, and `--preview-init-state` select the deterministic
-  state shown in the comparison image; their defaults are the first evaluated suite, task 0,
-  and initial state 0.
+## OPSD-Flow adaptation for Fast-WAM
 
-The script creates a deterministic, resumable subdirectory whose name contains the camera,
-translation, rotation, and checkpoint, for example:
+The implementation is a clean adaptation of the OPSD idea from
+<https://github.com/siyan-zhao/OPSD> at the revision in `manifests/upstream.json`. That revision
+does not include a repository license, so no OPSD source was copied. The important algorithmic
+invariant is preserved: the Teacher does **not** generate another answer/action trajectory. The
+Student runs Fast-WAM's original sampler once; the frozen Teacher only evaluates every latent on
+that exact Student trajectory with privileged conditioning.
 
-```text
-robot0_eye_in_hand-pos_xp0p000_yp0p000_zp0p000m-rot_xp15p0_yp0p0_zp0p0deg-model_libero_uncond_2cam224/
+The main components are:
+
+| Path | Responsibility |
+| --- | --- |
+| `src/resilient/faults/` | Reusable, severity-aware robot fault plugins and paired observations |
+| `src/resilient/opsd/teacher_inputs/` | Replaceable privileged-input policy; current provider changes only faulted images to clean images |
+| `src/resilient/opsd/adapters.py` | Fast-WAM-aligned LoRA discovery, freezing audit, enable/disable, and adapter state |
+| `src/resilient/opsd/model_adapter.py` | Score a Student latent with Fast-WAM's action vector field, without a scheduler step |
+| `src/resilient/opsd/losses.py` | Per-coordinate clipped flow-matching objective |
+| `src/resilient/opsd/trainer.py` | Memory-bounded scoring, distributed gradient update, and resume state |
+| `configs/opsd/fastwam_libero.yaml` | One-epoch algorithm/runtime parameters |
+| `scripts/resilient/train_opsd.sh` | Strict 4/8-GPU Accelerate launcher |
+
+Fast-WAM training freezes the VAE/text encoder, trains both MoT experts, and trains the proprio
+encoder. The OPSD adapter freezes the entire released checkpoint and inserts LoRA into every
+`nn.Linear` in `video_expert`, `action_expert`, and `proprio_encoder`; it excludes the VAE and text
+encoder. This matches the original trainable high-level scope, while deliberately adapting only
+linear weights (not expert Conv3d, normalization, modulation, or bias tensors). An audit JSON lists
+every target and trainable parameter count before training.
+
+For Student denoising step `k`, latent `x_k` is scored twice: `v_S(x_k,c_fault)` with active LoRA
+and `stopgrad(v_T(x_k,c_clean))` with LoRA disabled. With optional valid-action mask `m`, the step
+loss is the mean of `min((v_S-v_T)^2, 0.05)` over valid horizon/action coordinates. Step losses are
+weighted by `|delta_sigma_k| / sum_j |delta_sigma_j|` and then averaged across the batch. Thus the
+Teacher supplies a target vector field on Student points; it does not denoise, take a scheduler
+step, or regenerate actions.
+
+The rollout uses `opsd.rollout.num_inference_steps: ${eval_num_inference_steps}` and validates the
+captured timesteps/deltas against Fast-WAM's scheduler. For the released LIBERO task config this is
+exactly **10**, not an independent OPSD choice. The action horizon likewise interpolates to
+`data.train.num_frames - 1`, currently 32. Environment and inference seeds both interpolate from
+the project seed (42 by default), matching baseline Fast-WAM evaluation; process-local training
+RNGs use `seed + rank`.
+
+First perform the no-CUDA configuration smoke check:
+
+```bash
+python scripts/resilient/train_opsd.py opsd.validate_only=true
 ```
 
-The directory contains raw per-task results and videos, `summary.json`, a compact
-`camera_fault_summary.md`, a complete `camera_fault_manifest.json`, and
-`camera_pose_comparison.png`. The comparison is a 2 x 2 grid containing original and faulted
-`agentview`/wrist observations from the exact same initial state. The affected panel is annotated
-at its upper-left corner with the position and rotation offsets. The compact Markdown summary
-reports per-suite and exact success-weighted total rates. All these generated outputs remain
-under an ignored directory and must not be committed.
+When GPUs are available, start the single configured epoch on four or eight GPUs:
+
+```bash
+bash scripts/resilient/train_opsd.sh 4
+bash scripts/resilient/train_opsd.sh 8 output_dir=runs/opsd/my_run
+```
+
+Select non-default physical devices through `CUDA_VISIBLE_DEVICES`, for example
+`CUDA_VISIBLE_DEVICES=4,5,6,7 bash scripts/resilient/train_opsd.sh 4`.
+
+All parameters remain in YAML: fault and severity under `configs/fault/`, LoRA under
+`configs/adapter/`, Teacher input under `configs/teacher_input/`, and optimization/rollout settings
+under `configs/opsd/fastwam_libero.yaml`. Override `ckpt`, `opsd.dataset_stats_path`, and
+`output_dir` with repository-relative paths as needed. Resume with
+`resume=runs/opsd/my_run/checkpoints/state/step_XXXXXXXX` or `resume=auto` while reusing the same
+explicit output directory. Resume is accepted only at completed task boundaries and rejects a
+resolved-config hash mismatch. Raw training state, adapter checkpoints, metrics, and provenance
+remain under ignored `runs/`.
+
+The reference hardware remains Linux, 8 x NVIDIA RTX 6000 Ada 48 GB, CUDA 12.8, and bf16. Four-
+and eight-GPU execution are the supported defaults; full OPSD training has not yet been run or
+timed, so its final peak-memory requirement is not yet claimed.
+The current validation covers CPU unit tests, Hydra composition, LoRA injection/auditing, and a
+real LIBERO paired-camera render, but not model loading or a distributed optimizer step.
 
 ## Extension switches and baseline protection
 
@@ -266,7 +326,8 @@ The following policy is mandatory:
 
 | Switch | Default | Scope | Baseline effect |
 | --- | --- | --- | --- |
-| `EVALUATION.camera_pose_fault.enabled` | `false` | Apply the documented position/orientation offset to one LIBERO camera | None when disabled; the baseline scripts do not enable it |
+| `EVALUATION.fault.pipeline.enabled` | `false` | Enable an ordered robot-fault pipeline in the LIBERO evaluator | The evaluator follows its exact upstream reset/step path when disabled |
+| `return_denoising_trace` in `FastWAM.infer_action` | `false` | Return detached pre-step Student latents/timesteps/deltas for OPSD | Return schema and action sampling are unchanged when false |
 
 ## Development checks
 

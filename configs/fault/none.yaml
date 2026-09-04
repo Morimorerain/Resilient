@@ -1,0 +1,5 @@
+pipeline:
+  id: none
+  enabled: false
+  seed: 42
+  faults: []

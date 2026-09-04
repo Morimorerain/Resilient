@@ -9,16 +9,19 @@ Resilient 是一个以可复现性为首要目标、基于 [FastWAM](https://git
 - FastWAM 上游固定在提交 `7faa71108368fbb3b6885649f112af607427a2d4`。
 - 基线目标为 `libero_uncond_2cam224.pt` 及其配套数据统计文件。
 - 原始 checkpoint 使用 `EVALUATION.sigma_shift=5.0` 复现。
-- FastWAM 核心默认行为未被修改；项目扩展放在 `src/resilient/` 和 `scripts/resilient/`。
+- FastWAM 默认行为未改变；核心代码只增加一个已登记、默认关闭的去噪轨迹返回开关，项目具体
+  实现位于 `src/resilient/`。
 - 已在下方硬件上验证独立 Python/CUDA 环境、全部固定资产、LIBERO EGL 无界面 reset、单回合集成评测与完整 2,000 回合基准。
+- 带 severity 的 Fault 层和 OPSD-Flow 已完成 CPU、配置与仿真器烟测，尚未验证正式多卡 OPSD
+  训练。
 
 ## 仓库结构
 
 ```text
 Resilient/
-├── configs/                       # 上游 Hydra 配置
-├── experiments/libero/            # 上游 LIBERO 评测代码
-├── src/fastwam/                   # 固定版本的 FastWAM 上游实现
+├── configs/                       # Hydra 配置，包含 Fault/adapter/OPSD 参数
+├── experiments/libero/            # LIBERO 评测及默认关闭的 Fault hook
+├── src/fastwam/                   # 固定 FastWAM 及已登记的默认关闭补丁
 ├── src/resilient/                 # Resilient 扩展与适配器
 ├── scripts/resilient/             # 可复现的评测、下载与验证工具
 ├── environment/                   # 环境规范、锁文件与说明
@@ -200,53 +203,103 @@ NUM_GPUS=8 bash reproduce/fastwam_libero/evaluate_full.sh
 
 2026-09-04 使用发布 checkpoint，在 seed 42、10 个推理步、sigma shift 5.0、启用动作编译的设置下，`libero_spatial` 第 0 个任务单回合成功。rollout 阶段含首次 TorchInductor 编译共用时 114.52 秒。精简来源信息见 `reports/baselines/minimal-validation.json`。该结果仅为集成检查，不具有统计意义。
 
-## 评测相机位姿故障
+## 可复用 Fault 管线与评测
 
-正式脚本 `scripts/resilient/evaluate_camera_pose_fault.py` 通过基线所用的同一套 FastWAM
-持久化 worker 评测链路，评测一个确定性的相机位置/姿态故障。例如，将手腕相机绕其局部
-X 轴正向旋转 15 度，并在 GPU 0--3 上评测四个标准套件：
+Fault 定义是 `configs/fault/` 下与模型解耦的 YAML。`FaultPipeline` 按声明顺序提供 reset、
+observation、action、step 前后、临时挂起、断点状态和 detach 接口。后续图像污渍/遮挡、执行器
+限制、关节运动退化和动力学故障可通过插件加入，不需要继续在 Fast-WAM 中增加故障分支。每个
+Fault 都有稳定的 `family` 和独立的物理 `severity`（名称、数值、单位及可选等级），因此绕轴
+10/20/30 度属于同一 Fault family 的三个 severity。
+
+已提交的相机示例为 `configs/fault/visual/wrist_camera_local_z.yaml`。用 4 卡评测默认的手腕相机
+绕局部 +Z 轴 30 度：
 
 ```bash
-python scripts/resilient/evaluate_camera_pose_fault.py \
-  --camera robot0_eye_in_hand \
-  --position-offset 0.0 0.0 0.0 \
-  --rotation-offset-deg 15.0 0.0 0.0 \
+python scripts/resilient/evaluate_fault.py \
+  --fault-config configs/fault/visual/wrist_camera_local_z.yaml \
   --gpus 0,1,2,3 \
-  --checkpoint ./checkpoints/fastwam_release/libero_uncond_2cam224.pt
+  --checkpoint checkpoints/fastwam_release/libero_uncond_2cam224.pt
 ```
 
-八卡时使用 `--gpus 0,1,2,3,4,5,6,7`。每张列出的 GPU 会常驻一个模型 worker，因此每卡
-建议显存与基线相同，约为 32 GB。默认评测 `libero_spatial`、`libero_object`、
-`libero_goal` 和 `libero_10` 的 40 个任务，每任务 50 个 episode；较小实验可通过
-`--suites` 和 `--num-trials` 调整。
+`--severity 10/20/30` 可在不改变 Fault family 的情况下覆盖单个 Fault 的物理程度。八卡传入
+8 个 GPU ID。默认输出根目录为被忽略的 `evaluate_results/faults/`；规范子目录名包含 family、
+目标、severity、单位与 checkpoint，例如
+`visual-camera_pose-robot0_eye_in_hand-rotation_angle-p30p0degree__model-libero_uncond_2cam224/`。
+其中包含逐任务结果/视频、`summary.json`、`fault_summary.md`、`fault_manifest.json` 和
+`fault_comparison.png`。2×2 对比图从同一个仿真状态取得原始/故障第三人称与手腕图像，并在
+故障图左上角标注完整参数。增加 `--create-only` 可在不加载 Fast-WAM、不运行 episode 的情况
+下验证对比图渲染和多 worker 任务配置。
 
-故障参数语义固定，并会写入每次输出的 manifest：
+相机平移单位为米，沿原始相机局部轴；姿态按局部 X、Y、Z 顺序进行右手系旋转，单位为度。
+MuJoCo 相机沿局部 `-Z` 观察，局部 `+X` 对应原始图像右方，局部 `+Y` 对应原始图像上方。
+插件在 Teacher 请求特权图像时会临时恢复原始位姿，配对过程不会推进仿真时间。
 
-- `--camera` 可选 `agentview` 或 `robot0_eye_in_hand`。
-- `--position-offset X Y Z` 的单位为米，方向沿原始相机局部 X/Y/Z 轴。脚本会在内部将其
-  转换到 MuJoCo 父坐标系，因此同一组偏移在不同 suite/task 中具有一致的物理含义。
-- `--rotation-offset-deg X Y Z` 按 X、Y、Z 顺序绕相机局部轴进行右手系旋转，单位为度。
-  MuJoCo 相机沿局部 `-Z` 方向观察；局部 `+X` 是原始图像右方，局部 `+Y` 是原始图像
-  上方。FastWAM 的 180 度图像预处理不会改变物理旋转轴。
-- `--checkpoint` 指定模型。脚本会依次在 checkpoint 同目录推断
-  `<checkpoint_stem>_dataset_stats.json` 和 `dataset_stats.json`；不符合这两种命名时需通过
-  `--dataset-stats` 显式指定。
-- `--output-dir` 表示输出根目录，默认为 `evaluate_results/camera_pose_faults/`。
-  `--preview-suite`、`--preview-task-id` 和 `--preview-init-state` 用于指定对比图所用的确定性
-  初始状态；默认分别为第一个待评测 suite、task 0、initial state 0。
+## 面向 Fast-WAM 的 OPSD-Flow 适配
 
-脚本会建立一个可恢复运行的确定性子目录，名称包含相机、位置偏移、旋转偏移和 checkpoint，
-例如：
+本实现参考 `manifests/upstream.json` 固定版本的 <https://github.com/siyan-zhao/OPSD>，采用
+clean-room 方式适配。所检查版本没有仓库 LICENSE，因此没有复制其源码。核心约束保持不变：
+Teacher **不会重新生成答案或动作轨迹**。Student 只运行一次 Fast-WAM 原始采样器；冻结的
+Teacher 仅用特权条件评价这条 Student 轨迹上的每一个 latent。
 
-```text
-robot0_eye_in_hand-pos_xp0p000_yp0p000_zp0p000m-rot_xp15p0_yp0p0_zp0p0deg-model_libero_uncond_2cam224/
+主要模块如下：
+
+| 路径 | 作用 |
+| --- | --- |
+| `src/resilient/faults/` | 可复用、带 severity 的机器人 Fault 插件与配对观测 |
+| `src/resilient/opsd/teacher_inputs/` | 可替换的特权输入策略；当前仅把故障图像替换为干净图像 |
+| `src/resilient/opsd/adapters.py` | 与 Fast-WAM 对齐的 LoRA 发现、冻结审计、启停和权重状态 |
+| `src/resilient/opsd/model_adapter.py` | 使用 Fast-WAM 动作向量场评价 Student latent，不调用 scheduler step |
+| `src/resilient/opsd/losses.py` | 逐坐标裁剪的 flow-matching 损失 |
+| `src/resilient/opsd/trainer.py` | 限制显存的逐步打分、多卡梯度更新与断点恢复 |
+| `configs/opsd/fastwam_libero.yaml` | 单 epoch 算法与运行参数 |
+| `scripts/resilient/train_opsd.sh` | 严格限制为 4/8 卡的 Accelerate 启动器 |
+
+Fast-WAM 原训练冻结 VAE/text encoder，训练两个 MoT expert 及 proprio encoder。OPSD 会冻结
+整个发布 checkpoint，并向 `video_expert`、`action_expert`、`proprio_encoder` 内全部
+`nn.Linear` 插入 LoRA；VAE 和 text encoder 不插入。这与原训练的高层模块范围一致，但只适配
+线性权重，不更新 expert 中的 Conv3d、归一化、modulation 或 bias。训练前会输出逐层目标和
+可训练参数数量的审计 JSON。
+
+在 Student 去噪第 `k` 步，同一个 latent `x_k` 分别计算带 LoRA 的
+`v_S(x_k,c_fault)` 和关闭 LoRA 后的 `stopgrad(v_T(x_k,c_clean))`。若有动作有效位 mask `m`，
+该步损失是在有效 horizon/action 坐标上平均 `min((v_S-v_T)^2, 0.05)`；各步再按
+`|delta_sigma_k| / sum_j |delta_sigma_j|` 加权并对 batch 求平均。因此 Teacher 只提供 Student
+点上的目标向量场，不执行去噪、不调用 scheduler step，也不重新生成动作。
+
+`opsd.rollout.num_inference_steps` 直接引用 `${eval_num_inference_steps}`，并将采集到的 timestep
+和 delta 与 Fast-WAM scheduler 再校验。发布版 LIBERO 配置解析后严格为 **10 步**，不是 OPSD
+独立选择的超参数；动作 horizon 同样直接引用 `data.train.num_frames - 1`，当前为 32。环境和
+推理 seed 均引用项目 seed（默认 42），与 Fast-WAM 基线评测一致；进程内训练随机数使用
+`seed + rank`。
+
+先运行不使用 CUDA 的配置烟测：
+
+```bash
+python scripts/resilient/train_opsd.py opsd.validate_only=true
 ```
 
-目录内包含逐任务原始结果与视频、`summary.json`、精简的 `camera_fault_summary.md`、完整的
-`camera_fault_manifest.json` 以及 `camera_pose_comparison.png`。对比图为 2×2 排列，使用同一个
-初始状态同时展示原始/故障条件下的第三人称与手腕图像；真正发生偏移的面板左上角会标明位置
-和角度偏移。精简 Markdown 汇总表给出各套件结果和按成功次数精确加权的总结果。以上生成物
-都位于 Git 忽略目录下，不应提交。
+GPU 空闲后，分别用 4 卡或 8 卡启动配置中的单个 epoch：
+
+```bash
+bash scripts/resilient/train_opsd.sh 4
+bash scripts/resilient/train_opsd.sh 8 output_dir=runs/opsd/my_run
+```
+
+如需选择非默认物理卡，使用 `CUDA_VISIBLE_DEVICES`，例如
+`CUDA_VISIBLE_DEVICES=4,5,6,7 bash scripts/resilient/train_opsd.sh 4`。
+
+所有参数均保留在 YAML：Fault/severity 位于 `configs/fault/`，LoRA 位于 `configs/adapter/`，
+Teacher 输入位于 `configs/teacher_input/`，优化和 rollout 参数位于
+`configs/opsd/fastwam_libero.yaml`。按需使用仓库相对路径覆盖 `ckpt`、
+`opsd.dataset_stats_path` 和 `output_dir`。恢复训练时传入
+`resume=runs/opsd/my_run/checkpoints/state/step_XXXXXXXX`，或在显式复用同一输出目录时使用
+`resume=auto`。恢复点必须处于完整 task 边界，且解析后的配置哈希必须一致。训练状态、LoRA
+checkpoint、指标和来源记录均写入被忽略的 `runs/`。
+
+参考硬件仍为 Linux、8×NVIDIA RTX 6000 Ada 48 GB、CUDA 12.8 和 bf16；默认支持 4 卡与 8
+卡。由于尚未正式运行或计时 OPSD 训练，目前不声明其最终峰值显存需求。本阶段已验证 CPU
+单元测试、Hydra 配置组合、LoRA 插入/
+审计，以及真实 LIBERO 相机干净/故障配对渲染，但尚未验证模型载入与多卡 optimizer step。
 
 ## 扩展开关与基线保护
 
@@ -260,7 +313,8 @@ robot0_eye_in_hand-pos_xp0p000_yp0p000_zp0p000m-rot_xp15p0_yp0p0_zp0p0deg-model_
 
 | 开关 | 默认值 | 作用范围 | 对基线的影响 |
 | --- | --- | --- | --- |
-| `EVALUATION.camera_pose_fault.enabled` | `false` | 对一个 LIBERO 相机施加文档所述的位置/姿态偏移 | 关闭时无影响；基线脚本不会启用该开关 |
+| `EVALUATION.fault.pipeline.enabled` | `false` | 在 LIBERO evaluator 中启用有序机器人 Fault 管线 | 关闭时 evaluator 走完全相同的上游 reset/step 路径 |
+| `FastWAM.infer_action` 的 `return_denoising_trace` | `false` | 为 OPSD 返回分离的 Student 去噪前 latent/timestep/delta | 为 false 时返回结构与动作采样不变 |
 
 ## 开发检查
 

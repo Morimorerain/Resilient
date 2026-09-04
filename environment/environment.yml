@@ -4,3 +4,7 @@ channels:
 dependencies:
   - python=3.10.20
   - pip=26.0.1
+  - pip:
+      - -r ../requirements.txt
+      - -r ../requirements-libero.txt
+      - -e ..

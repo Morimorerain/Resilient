@@ -9,5 +9,11 @@
     "commit": "8f1084e3132a39270c3a13ebe37270a43ece2a01",
     "license": "MIT",
     "note": "Install simulator-only dependencies from requirements-libero.txt; do not install LIBERO's historical full requirements file."
+  },
+  "opsd": {
+    "repository": "https://github.com/siyan-zhao/OPSD.git",
+    "commit": "c1b2b01188b14afbaf7ce14ba8aecd58908589ae",
+    "license": null,
+    "note": "Algorithm and configuration reference only. The inspected revision has no repository license file, so Resilient uses a clean adaptation and does not copy OPSD source."
   }
 }

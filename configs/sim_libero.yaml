@@ -41,12 +41,15 @@ EVALUATION:
   dataset_stats_path: null
   device: cuda
 
-  # Disabled by default to preserve the original FastWAM camera behavior.
-  camera_pose_fault:
-    enabled: false
-    camera: agentview
-    position_offset: [0.0, 0.0, 0.0]
-    rotation_offset_deg: [0.0, 0.0, 0.0]
+  # Disabled by default. Resilient fault plugins may act on observations,
+  # actions, environment parameters, or dynamics without changing this runner.
+  fault:
+    pipeline:
+      id: none
+      enabled: false
+      seed: ${seed}
+      faults: []
+  fault_config_path: null
 
 MULTIRUN:
   create_only: false

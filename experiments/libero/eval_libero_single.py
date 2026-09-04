@@ -40,8 +40,8 @@ from fastwam.datasets.lerobot.utils.normalizer import load_dataset_stats_from_js
 from fastwam.utils.pytorch_utils import set_global_seed
 from fastwam.datasets.lerobot.robot_video_dataset import DEFAULT_PROMPT
 from libero.libero import benchmark, get_libero_path
-from resilient.camera_pose_fault import CameraPoseFaultApplier, CameraPoseFaultSpec
-from action_ensembler import ActionEnsembler
+from resilient.faults import FaultPipeline, FaultTransition, build_fault_pipeline
+from experiments.libero.action_ensembler import ActionEnsembler
 
 OmegaConf.register_new_resolver("eval", eval)
 OmegaConf.register_new_resolver("max", lambda x: max(x))
@@ -475,7 +475,7 @@ def run_single_episode(
     input_w: int,
     input_h: int,
     model_device: str,
-    camera_pose_fault: CameraPoseFaultApplier | None = None,
+    fault_pipeline: FaultPipeline | None = None,
 ) -> tuple[bool, list, list[dict[str, Any]], Optional[float]]:
     max_steps = _get_max_steps(cfg.EVALUATION.task_suite_name)
     replan_steps = int(cfg.EVALUATION.get("replan_steps", 5))
@@ -484,10 +484,17 @@ def run_single_episode(
     visualize_future_video = bool(cfg.EVALUATION.get("visualize_future_video", False))
     capture_steps = set(_get_future_frame_capture_steps(cfg)[1:])
 
+    pipeline = fault_pipeline or FaultPipeline(pipeline_id="none", seed=0, faults=[])
+    episode_context = pipeline.context(episode_index=episode_idx, step_index=0)
     env.reset()
-    if camera_pose_fault is not None:
-        camera_pose_fault.apply(env)
-    obs = env.set_init_state(initial_state)
+    if pipeline.enabled:
+        pipeline.on_reset(env, episode_context)
+        raw_obs = env.set_init_state(initial_state)
+        obs = pipeline.transform_observation(raw_obs, env, episode_context)
+    else:
+        # Preserve the exact upstream reset path when fault injection is disabled.
+        obs = env.set_init_state(initial_state)
+        raw_obs = obs
     if use_action_ensembler:
         ensembler = ActionEnsembler()
         ensembler.reset()
@@ -505,8 +512,31 @@ def run_single_episode(
     pbar = tqdm(total=max_steps + num_steps_wait, desc=f"Episode {episode_idx + 1}")
     while t < max_steps + num_steps_wait:
         pbar.update(1)
+        step_context = pipeline.context(episode_index=episode_idx, step_index=t)
         if t < num_steps_wait:
-            obs, _, done, _ = env.step(get_libero_dummy_action())
+            policy_action = get_libero_dummy_action()
+            if pipeline.enabled:
+                executed_action = pipeline.transform_action(policy_action, env, step_context)
+                pipeline.before_step(env, executed_action, step_context)
+                next_raw_obs, reward, done, info = env.step(executed_action)
+                next_obs = pipeline.transform_observation(next_raw_obs, env, step_context)
+                transition = FaultTransition(
+                    raw_observation=raw_obs,
+                    student_observation=obs,
+                    policy_action=policy_action,
+                    executed_action=executed_action,
+                    next_raw_observation=next_raw_obs,
+                    next_student_observation=next_obs,
+                    reward=float(reward),
+                    done=bool(done),
+                    info={} if info is None else dict(info),
+                    fault_metadata=pipeline.metadata()["faults"],
+                )
+                pipeline.after_step(env, transition, step_context)
+                raw_obs, obs = next_raw_obs, next_obs
+            else:
+                obs, _, done, _ = env.step(policy_action)
+                raw_obs = obs
             t += 1
             continue
 
@@ -542,7 +572,29 @@ def run_single_episode(
             imgs = get_libero_image(obs)
             replay_images.append(imgs.copy())
 
-        obs, _, done, _ = env.step(pending_actions.pop(0))
+        policy_action = pending_actions.pop(0)
+        if pipeline.enabled:
+            executed_action = pipeline.transform_action(policy_action, env, step_context)
+            pipeline.before_step(env, executed_action, step_context)
+            next_raw_obs, reward, done, info = env.step(executed_action)
+            next_obs = pipeline.transform_observation(next_raw_obs, env, step_context)
+            transition = FaultTransition(
+                raw_observation=raw_obs,
+                student_observation=obs,
+                policy_action=policy_action,
+                executed_action=executed_action,
+                next_raw_observation=next_raw_obs,
+                next_student_observation=next_obs,
+                reward=float(reward),
+                done=bool(done),
+                info={} if info is None else dict(info),
+                fault_metadata=pipeline.metadata()["faults"],
+            )
+            pipeline.after_step(env, transition, step_context)
+            raw_obs, obs = next_raw_obs, next_obs
+        else:
+            obs, _, done, _ = env.step(policy_action)
+            raw_obs = obs
         if visualize_future_video and current_predicted_future_clip is not None:
             current_replan_step += 1
             if current_replan_step in capture_steps:
@@ -630,16 +682,15 @@ def run_single_task(
         results["episode_future_video_psnr"] = []
         results["future_video_psnr_mean"] = None
 
-    camera_pose_fault_spec = CameraPoseFaultSpec.from_config(
-        cfg.EVALUATION.get("camera_pose_fault")
-    )
-    camera_pose_fault = (
-        CameraPoseFaultApplier(camera_pose_fault_spec)
-        if camera_pose_fault_spec.enabled
-        else None
-    )
-    if camera_pose_fault is not None:
-        results["camera_pose_fault"] = camera_pose_fault_spec.to_dict()
+    fault_config_path = cfg.EVALUATION.get("fault_config_path")
+    if fault_config_path is None:
+        fault_config = OmegaConf.to_container(cfg.EVALUATION.get("fault"), resolve=True)
+    else:
+        fault_config = OmegaConf.to_container(
+            OmegaConf.load(Path(str(fault_config_path)).expanduser()), resolve=True
+        )
+    fault_pipeline = build_fault_pipeline(fault_config)
+    results["fault"] = fault_pipeline.metadata()
 
     for trial_idx in range(int(cfg.EVALUATION.num_trials)):
         success, replay_images, predicted_future_video_clips, episode_mean_psnr = run_single_episode(
@@ -654,7 +705,7 @@ def run_single_task(
             input_w=input_w,
             input_h=input_h,
             model_device=model_device,
-            camera_pose_fault=camera_pose_fault,
+            fault_pipeline=fault_pipeline,
         )
         if success:
             results["successes"] += 1
@@ -703,8 +754,8 @@ def run_single_task(
                     task_description=task_description,
                 )
 
-    if camera_pose_fault is not None and camera_pose_fault.last_metadata is not None:
-        results["camera_pose_fault"] = camera_pose_fault.last_metadata
+    results["fault"] = fault_pipeline.metadata()
+    fault_pipeline.detach(env)
 
     close_fn = getattr(env, "close", None)
     if close_fn is not None:

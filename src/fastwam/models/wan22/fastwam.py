@@ -992,6 +992,7 @@ class FastWAM(torch.nn.Module):
         rand_device: str = "cpu",
         tiled: bool = False,
         compile_action_infer: bool = False,
+        return_denoising_trace: bool = False,
     ) -> dict[str, Any]:
         self.eval()
         if str(getattr(self.video_expert, "video_attention_mask_mode", "")) != "first_frame_causal":
@@ -1136,10 +1137,20 @@ class FastWAM(torch.nn.Module):
             dtype=latents_action.dtype,
             shift_override=sigma_shift,
         )
+        denoising_trace = [] if return_denoising_trace else None
         for step_t_action, step_delta_action in zip(infer_timesteps_action, infer_deltas_action):
             if compile_action_infer:
                 torch.compiler.cudagraph_mark_step_begin()
             timestep_action = step_t_action.unsqueeze(0).to(dtype=latents_action.dtype, device=self.device)
+
+            if denoising_trace is not None:
+                denoising_trace.append(
+                    {
+                        "latent": latents_action.detach().clone(),
+                        "timestep": timestep_action.detach().clone(),
+                        "delta_sigma": step_delta_action.detach().clone(),
+                    }
+                )
 
             pred_action_posi = denoise_action_with_video_cache(
                 latents_action=latents_action,
@@ -1154,9 +1165,12 @@ class FastWAM(torch.nn.Module):
 
             latents_action = self.infer_action_scheduler.step(pred_action, step_delta_action, latents_action)
 
-        return {
+        result = {
             "action": latents_action[0].detach().to(device="cpu", dtype=torch.float32),
         }
+        if denoising_trace is not None:
+            result["denoising_trace"] = denoising_trace
+        return result
 
     @torch.no_grad()
     def infer(

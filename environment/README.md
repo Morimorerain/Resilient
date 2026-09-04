@@ -22,6 +22,6 @@ uv pip install --index-strategy unsafe-best-match \
   -r environment/pip-freeze-cu128.txt
 ```
 
-The lock snapshot excludes editable local packages. Install Resilient and the pinned LIBERO checkout separately as described in the root README.
+The lock snapshot excludes editable local packages. Install Resilient and the pinned LIBERO checkout separately as described in the root README. OPSD adapter support uses `peft==0.15.2`; it is part of every primary dependency declaration and the lock snapshot.
 
-`environment.yml` is an equivalent Conda bootstrap specification, but the uv path is the validated reference environment. Do not update packages interactively without updating `requirements.txt`, `requirements-libero.txt`, `pyproject.toml`, `pip-freeze-cu128.txt`, and both root README files. A hardware snapshot belongs in ignored `AILOG/` during development.
+`environment.yml` is an equivalent Conda bootstrap specification that installs the same two requirements files and the editable repository, but the uv path is the validated reference environment. Run `conda env create -f environment/environment.yml` from the repository root. Do not update packages interactively without updating `requirements.txt`, `requirements-libero.txt`, `pyproject.toml`, `pip-freeze-cu128.txt`, and both root README files. A hardware snapshot belongs in ignored `AILOG/` during development.

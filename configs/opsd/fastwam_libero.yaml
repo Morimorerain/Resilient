@@ -1,0 +1,54 @@
+# @package _global_
+
+defaults:
+  - /train
+  - /fault: visual/wrist_camera_local_z
+  - /adapter: fastwam_aligned_lora
+  - /teacher_input: clean_visual
+  - override /task: libero_uncond_2cam224_1e-4
+  - _self_
+
+ckpt: checkpoints/fastwam_release/libero_uncond_2cam224.pt
+output_dir: runs/opsd/wrist_camera_local_z/${now:%Y-%m-%d}_${now:%H-%M-%S}
+resume: null
+
+learning_rate: 5.0e-6
+weight_decay: 1.0e-2
+lr_scheduler_type: cosine
+lr_warmup_ratio: 0.05
+max_grad_norm: 0.1
+mixed_precision: bf16
+gradient_accumulation_steps: 1
+save_every: 4
+
+opsd:
+  validate_only: false
+  num_epochs: 1
+  dataset_stats_path: checkpoints/fastwam_release/libero_uncond_2cam224_dataset_stats.json
+  distributed:
+    num_processes: 4
+  loss:
+    type: student_trajectory_flow_matching
+    pointwise_clip_enabled: true
+    pointwise_clip: 0.05
+    step_weighting: normalized_abs_delta_sigma
+  rollout:
+    suites: [libero_spatial, libero_object, libero_goal, libero_10]
+    rollouts_per_task: 1
+    environment_seed: ${seed}
+    inference_seed: ${seed}
+    num_steps_wait: 30
+    replan_steps: 10
+    action_horizon: ${eval:'${data.train.num_frames} - 1'}
+    num_inference_steps: ${eval_num_inference_steps}
+    sigma_shift: 5.0
+    rand_device: cpu
+    compile_action_infer: false
+    binarize_gripper: true
+
+hydra:
+  job:
+    chdir: false
+  run:
+    dir: .
+  output_subdir: null
