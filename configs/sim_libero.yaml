@@ -41,6 +41,13 @@ EVALUATION:
   dataset_stats_path: null
   device: cuda
 
+  # Disabled by default to preserve the original FastWAM camera behavior.
+  camera_pose_fault:
+    enabled: false
+    camera: agentview
+    position_offset: [0.0, 0.0, 0.0]
+    rotation_offset_deg: [0.0, 0.0, 0.0]
+
 MULTIRUN:
   create_only: false
   task_file: null

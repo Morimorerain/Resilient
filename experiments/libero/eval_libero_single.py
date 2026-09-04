@@ -40,6 +40,7 @@ from fastwam.datasets.lerobot.utils.normalizer import load_dataset_stats_from_js
 from fastwam.utils.pytorch_utils import set_global_seed
 from fastwam.datasets.lerobot.robot_video_dataset import DEFAULT_PROMPT
 from libero.libero import benchmark, get_libero_path
+from resilient.camera_pose_fault import CameraPoseFaultApplier, CameraPoseFaultSpec
 from action_ensembler import ActionEnsembler
 
 OmegaConf.register_new_resolver("eval", eval)
@@ -474,6 +475,7 @@ def run_single_episode(
     input_w: int,
     input_h: int,
     model_device: str,
+    camera_pose_fault: CameraPoseFaultApplier | None = None,
 ) -> tuple[bool, list, list[dict[str, Any]], Optional[float]]:
     max_steps = _get_max_steps(cfg.EVALUATION.task_suite_name)
     replan_steps = int(cfg.EVALUATION.get("replan_steps", 5))
@@ -483,6 +485,8 @@ def run_single_episode(
     capture_steps = set(_get_future_frame_capture_steps(cfg)[1:])
 
     env.reset()
+    if camera_pose_fault is not None:
+        camera_pose_fault.apply(env)
     obs = env.set_init_state(initial_state)
     if use_action_ensembler:
         ensembler = ActionEnsembler()
@@ -626,6 +630,17 @@ def run_single_task(
         results["episode_future_video_psnr"] = []
         results["future_video_psnr_mean"] = None
 
+    camera_pose_fault_spec = CameraPoseFaultSpec.from_config(
+        cfg.EVALUATION.get("camera_pose_fault")
+    )
+    camera_pose_fault = (
+        CameraPoseFaultApplier(camera_pose_fault_spec)
+        if camera_pose_fault_spec.enabled
+        else None
+    )
+    if camera_pose_fault is not None:
+        results["camera_pose_fault"] = camera_pose_fault_spec.to_dict()
+
     for trial_idx in range(int(cfg.EVALUATION.num_trials)):
         success, replay_images, predicted_future_video_clips, episode_mean_psnr = run_single_episode(
             env=env,
@@ -639,6 +654,7 @@ def run_single_task(
             input_w=input_w,
             input_h=input_h,
             model_device=model_device,
+            camera_pose_fault=camera_pose_fault,
         )
         if success:
             results["successes"] += 1
@@ -686,6 +702,9 @@ def run_single_task(
                     success=success,
                     task_description=task_description,
                 )
+
+    if camera_pose_fault is not None and camera_pose_fault.last_metadata is not None:
+        results["camera_pose_fault"] = camera_pose_fault.last_metadata
 
     close_fn = getattr(env, "close", None)
     if close_fn is not None:

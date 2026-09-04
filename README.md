@@ -20,7 +20,7 @@ Resilient/
 ├── experiments/libero/            # Upstream LIBERO evaluation
 ├── src/fastwam/                   # Pinned upstream FastWAM implementation
 ├── src/resilient/                 # Resilient extensions and adapters
-├── scripts/resilient/             # Reproducible download/verification helpers
+├── scripts/resilient/             # Reproducible evaluation/download/verification tools
 ├── environment/                   # Environment specification, lock, and notes
 ├── manifests/                     # Pinned upstream and external asset metadata
 ├── reproduce/fastwam_libero/      # Minimal and full reproduction recipes
@@ -200,6 +200,60 @@ The run used seed 42, 10 inference steps, sigma shift 5.0, CFG 1.0, action compi
 
 On 2026-09-04, `libero_spatial` task 0 completed successfully in its single episode with seed 42, 10 inference steps, sigma shift 5.0, action compilation enabled, and the released checkpoint. The rollout phase took 114.52 seconds including first-use TorchInductor compilation. See `reports/baselines/minimal-validation.json` for compact provenance. This is an integration check, not a statistically meaningful benchmark result.
 
+## Evaluating camera-pose faults
+
+The tracked `scripts/resilient/evaluate_camera_pose_fault.py` entry point evaluates one
+deterministic camera position/orientation fault through the same persistent-worker FastWAM
+pipeline used by the baseline. For example, rotate the wrist camera by +15 degrees about its
+local X axis and evaluate the four standard suites on GPUs 0--3:
+
+```bash
+python scripts/resilient/evaluate_camera_pose_fault.py \
+  --camera robot0_eye_in_hand \
+  --position-offset 0.0 0.0 0.0 \
+  --rotation-offset-deg 15.0 0.0 0.0 \
+  --gpus 0,1,2,3 \
+  --checkpoint ./checkpoints/fastwam_release/libero_uncond_2cam224.pt
+```
+
+Use `--gpus 0,1,2,3,4,5,6,7` for eight GPUs. Each listed GPU hosts one persistent model worker
+and therefore needs the same approximately 32 GB recommended memory as the baseline. The default
+run is 40 tasks x 50 episodes across `libero_spatial`, `libero_object`, `libero_goal`, and
+`libero_10`; use `--suites` and `--num-trials` for smaller experiments.
+
+Fault parameter semantics are fixed and recorded in every output manifest:
+
+- `--camera` accepts `agentview` or `robot0_eye_in_hand`.
+- `--position-offset X Y Z` is in meters along the original local camera X/Y/Z axes. The script
+  converts it into the MuJoCo parent frame, so one offset has consistent physical meaning across
+  suites and tasks.
+- `--rotation-offset-deg X Y Z` applies right-handed rotations about the camera's local axes in
+  X-then-Y-then-Z order. MuJoCo cameras look along local `-Z`; local `+X` is raw-image right and
+  local `+Y` is raw-image up. FastWAM's 180-degree image preprocessing does not change the
+  physical rotation axes.
+- `--checkpoint` selects the model. The script looks for
+  `<checkpoint_stem>_dataset_stats.json` and then `dataset_stats.json` beside it; pass
+  `--dataset-stats` when neither convention applies.
+- `--output-dir` is an output root and defaults to `evaluate_results/camera_pose_faults/`.
+  `--preview-suite`, `--preview-task-id`, and `--preview-init-state` select the deterministic
+  state shown in the comparison image; their defaults are the first evaluated suite, task 0,
+  and initial state 0.
+
+The script creates a deterministic, resumable subdirectory whose name contains the camera,
+translation, rotation, and checkpoint, for example:
+
+```text
+robot0_eye_in_hand-pos_xp0p000_yp0p000_zp0p000m-rot_xp15p0_yp0p0_zp0p0deg-model_libero_uncond_2cam224/
+```
+
+The directory contains raw per-task results and videos, `summary.json`, a compact
+`camera_fault_summary.md`, a complete `camera_fault_manifest.json`, and
+`camera_pose_comparison.png`. The comparison is a 2 x 2 grid containing original and faulted
+`agentview`/wrist observations from the exact same initial state. The affected panel is annotated
+at its upper-left corner with the position and rotation offsets. The compact Markdown summary
+reports per-suite and exact success-weighted total rates. All these generated outputs remain
+under an ignored directory and must not be committed.
+
 ## Extension switches and baseline protection
 
 The following policy is mandatory:
@@ -212,7 +266,7 @@ The following policy is mandatory:
 
 | Switch | Default | Scope | Baseline effect |
 | --- | --- | --- | --- |
-| None | — | No FastWAM source modification has been made | None |
+| `EVALUATION.camera_pose_fault.enabled` | `false` | Apply the documented position/orientation offset to one LIBERO camera | None when disabled; the baseline scripts do not enable it |
 
 ## Development checks
 

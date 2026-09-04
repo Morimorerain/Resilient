@@ -20,7 +20,7 @@ Resilient/
 ├── experiments/libero/            # 上游 LIBERO 评测代码
 ├── src/fastwam/                   # 固定版本的 FastWAM 上游实现
 ├── src/resilient/                 # Resilient 扩展与适配器
-├── scripts/resilient/             # 可复现的下载与验证工具
+├── scripts/resilient/             # 可复现的评测、下载与验证工具
 ├── environment/                   # 环境规范、锁文件与说明
 ├── manifests/                     # 上游及外部资产固定信息
 ├── reproduce/fastwam_libero/      # 最小与完整复现入口
@@ -200,6 +200,54 @@ NUM_GPUS=8 bash reproduce/fastwam_libero/evaluate_full.sh
 
 2026-09-04 使用发布 checkpoint，在 seed 42、10 个推理步、sigma shift 5.0、启用动作编译的设置下，`libero_spatial` 第 0 个任务单回合成功。rollout 阶段含首次 TorchInductor 编译共用时 114.52 秒。精简来源信息见 `reports/baselines/minimal-validation.json`。该结果仅为集成检查，不具有统计意义。
 
+## 评测相机位姿故障
+
+正式脚本 `scripts/resilient/evaluate_camera_pose_fault.py` 通过基线所用的同一套 FastWAM
+持久化 worker 评测链路，评测一个确定性的相机位置/姿态故障。例如，将手腕相机绕其局部
+X 轴正向旋转 15 度，并在 GPU 0--3 上评测四个标准套件：
+
+```bash
+python scripts/resilient/evaluate_camera_pose_fault.py \
+  --camera robot0_eye_in_hand \
+  --position-offset 0.0 0.0 0.0 \
+  --rotation-offset-deg 15.0 0.0 0.0 \
+  --gpus 0,1,2,3 \
+  --checkpoint ./checkpoints/fastwam_release/libero_uncond_2cam224.pt
+```
+
+八卡时使用 `--gpus 0,1,2,3,4,5,6,7`。每张列出的 GPU 会常驻一个模型 worker，因此每卡
+建议显存与基线相同，约为 32 GB。默认评测 `libero_spatial`、`libero_object`、
+`libero_goal` 和 `libero_10` 的 40 个任务，每任务 50 个 episode；较小实验可通过
+`--suites` 和 `--num-trials` 调整。
+
+故障参数语义固定，并会写入每次输出的 manifest：
+
+- `--camera` 可选 `agentview` 或 `robot0_eye_in_hand`。
+- `--position-offset X Y Z` 的单位为米，方向沿原始相机局部 X/Y/Z 轴。脚本会在内部将其
+  转换到 MuJoCo 父坐标系，因此同一组偏移在不同 suite/task 中具有一致的物理含义。
+- `--rotation-offset-deg X Y Z` 按 X、Y、Z 顺序绕相机局部轴进行右手系旋转，单位为度。
+  MuJoCo 相机沿局部 `-Z` 方向观察；局部 `+X` 是原始图像右方，局部 `+Y` 是原始图像
+  上方。FastWAM 的 180 度图像预处理不会改变物理旋转轴。
+- `--checkpoint` 指定模型。脚本会依次在 checkpoint 同目录推断
+  `<checkpoint_stem>_dataset_stats.json` 和 `dataset_stats.json`；不符合这两种命名时需通过
+  `--dataset-stats` 显式指定。
+- `--output-dir` 表示输出根目录，默认为 `evaluate_results/camera_pose_faults/`。
+  `--preview-suite`、`--preview-task-id` 和 `--preview-init-state` 用于指定对比图所用的确定性
+  初始状态；默认分别为第一个待评测 suite、task 0、initial state 0。
+
+脚本会建立一个可恢复运行的确定性子目录，名称包含相机、位置偏移、旋转偏移和 checkpoint，
+例如：
+
+```text
+robot0_eye_in_hand-pos_xp0p000_yp0p000_zp0p000m-rot_xp15p0_yp0p0_zp0p0deg-model_libero_uncond_2cam224/
+```
+
+目录内包含逐任务原始结果与视频、`summary.json`、精简的 `camera_fault_summary.md`、完整的
+`camera_fault_manifest.json` 以及 `camera_pose_comparison.png`。对比图为 2×2 排列，使用同一个
+初始状态同时展示原始/故障条件下的第三人称与手腕图像；真正发生偏移的面板左上角会标明位置
+和角度偏移。精简 Markdown 汇总表给出各套件结果和按成功次数精确加权的总结果。以上生成物
+都位于 Git 忽略目录下，不应提交。
+
 ## 扩展开关与基线保护
 
 以下规则为强制要求：
@@ -212,7 +260,7 @@ NUM_GPUS=8 bash reproduce/fastwam_libero/evaluate_full.sh
 
 | 开关 | 默认值 | 作用范围 | 对基线的影响 |
 | --- | --- | --- | --- |
-| 暂无 | — | 尚未修改 FastWAM 源码 | 无 |
+| `EVALUATION.camera_pose_fault.enabled` | `false` | 对一个 LIBERO 相机施加文档所述的位置/姿态偏移 | 关闭时无影响；基线脚本不会启用该开关 |
 
 ## 开发检查
 
