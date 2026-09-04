@@ -12,6 +12,13 @@ ckpt: checkpoints/fastwam_release/libero_uncond_2cam224.pt
 output_dir: runs/opsd/wrist_camera_local_z/${now:%Y-%m-%d}_${now:%H-%M-%S}
 resume: null
 
+# Match the released-checkpoint evaluation path: construct the architecture,
+# load only shared VAE/text assets, then let `ckpt` replace both experts.
+model:
+  load_text_encoder: true
+  skip_dit_load_from_pretrain: true
+  action_dit_pretrained_path: null
+
 learning_rate: 5.0e-6
 weight_decay: 1.0e-2
 lr_scheduler_type: cosine

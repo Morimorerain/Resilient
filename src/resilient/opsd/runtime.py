@@ -79,6 +79,12 @@ def validate_opsd_config(cfg: DictConfig, *, world_size: int | None = None) -> d
         )
     if int(opsd.rollout.action_horizon) != int(cfg.data.train.num_frames) - 1:
         raise ValueError("OPSD action horizon must match Fast-WAM data.train.num_frames - 1.")
+    if not bool(cfg.model.skip_dit_load_from_pretrain):
+        raise ValueError("OPSD must skip redundant video-DiT pretraining before checkpoint load.")
+    if cfg.model.action_dit_pretrained_path is not None:
+        raise ValueError("OPSD must skip redundant ActionDiT pretraining before checkpoint load.")
+    if not bool(cfg.model.load_text_encoder):
+        raise ValueError("On-policy OPSD prompts require the Fast-WAM text encoder.")
     local_rollouts = (
         len(opsd.rollout.suites)
         * 10

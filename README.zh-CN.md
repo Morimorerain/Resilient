@@ -272,6 +272,11 @@ Fast-WAM 原训练冻结 VAE/text encoder，训练两个 MoT expert 及 proprio 
 推理 seed 均引用项目 seed（默认 42），与 Fast-WAM 基线评测一致；进程内训练随机数使用
 `seed + rank`。
 
+模型构造也与发布 checkpoint 的评测路径一致：`load_text_encoder=true`、
+`skip_dit_load_from_pretrain=true`、`action_dit_pretrained_path=null`。程序先构造网络并载入已
+记录的共用 VAE/text 资产，再由 `ckpt` 提供两个训练后 expert；运行时会拒绝重复下载或加载
+额外 video/action DiT 预训练权重的配置。
+
 先运行不使用 CUDA 的配置烟测：
 
 ```bash

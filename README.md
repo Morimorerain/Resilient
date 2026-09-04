@@ -283,6 +283,12 @@ exactly **10**, not an independent OPSD choice. The action horizon likewise inte
 the project seed (42 by default), matching baseline Fast-WAM evaluation; process-local training
 RNGs use `seed + rank`.
 
+Model construction also matches released-checkpoint evaluation: `load_text_encoder=true`,
+`skip_dit_load_from_pretrain=true`, and `action_dit_pretrained_path=null`. The architecture and
+documented shared VAE/text assets are loaded first, then `ckpt` supplies both trained experts. A
+runtime invariant rejects configurations that would redundantly download/load separate pretrained
+video or action DiT weights.
+
 First perform the no-CUDA configuration smoke check:
 
 ```bash
