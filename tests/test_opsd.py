@@ -19,6 +19,7 @@ from resilient.opsd.adapters import (
 )
 from resilient.opsd.losses import opsd_flow_loss
 from resilient.opsd.teacher_inputs import TeacherInputContext, build_teacher_input_provider
+from resilient.opsd.trainer import _scalar_to_float
 from resilient.opsd.types import ActionConditioning, StudentTrajectory
 
 
@@ -40,6 +41,10 @@ class _ToyFastWAM(nn.Module):
 
 
 class OPSDLossTests(unittest.TestCase):
+    def test_scalar_metric_accepts_tensor_and_deepspeed_float(self) -> None:
+        self.assertEqual(_scalar_to_float(torch.tensor(1.25, requires_grad=True)), 1.25)
+        self.assertEqual(_scalar_to_float(2.5), 2.5)
+
     def test_weighted_student_trajectory_loss_and_teacher_detach(self) -> None:
         student = torch.zeros((1, 2, 1, 1), requires_grad=True)
         teacher = torch.tensor([[[[1.0]], [[2.0]]]], requires_grad=True)

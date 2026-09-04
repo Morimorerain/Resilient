@@ -304,6 +304,9 @@ bash scripts/resilient/train_opsd.sh 8 output_dir=runs/opsd/my_run
 
 Select non-default physical devices through `CUDA_VISIBLE_DEVICES`, for example
 `CUDA_VISIBLE_DEVICES=4,5,6,7 bash scripts/resilient/train_opsd.sh 4`.
+The launcher uses an OPSD-specific DeepSpeed ZeRO-2 config with
+`train_micro_batch_size_per_gpu=1`, matching the runtime's one-trajectory-at-a-time
+updates. The shared Fast-WAM training DeepSpeed config is left unchanged.
 
 All parameters remain in YAML: fault and severity under `configs/fault/`, LoRA under
 `configs/adapter/`, Teacher input under `configs/teacher_input/`, and optimization/rollout settings

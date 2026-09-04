@@ -14,6 +14,13 @@ from .model_adapter import FastWAMActionFlowScorer
 from .types import ActionConditioning, StudentTrajectory
 
 
+def _scalar_to_float(value: torch.Tensor | float) -> float:
+    """Convert scalar metrics returned by native PyTorch or DeepSpeed."""
+    if isinstance(value, torch.Tensor):
+        return float(value.detach().float().item())
+    return float(value)
+
+
 class OPSDFlowTrainer:
     """Score a detached Student path while never constructing a Teacher path."""
 
@@ -105,7 +112,7 @@ class OPSDFlowTrainer:
             "loss": weighted_loss,
             "loss_raw": weighted_raw,
             "clip_fraction": weighted_clip_fraction,
-            "grad_norm": float(grad_norm.detach().float().item()),
+            "grad_norm": _scalar_to_float(grad_norm),
         }
 
     def save_checkpoint(

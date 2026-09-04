@@ -292,6 +292,9 @@ bash scripts/resilient/train_opsd.sh 8 output_dir=runs/opsd/my_run
 
 如需选择非默认物理卡，使用 `CUDA_VISIBLE_DEVICES`，例如
 `CUDA_VISIBLE_DEVICES=4,5,6,7 bash scripts/resilient/train_opsd.sh 4`。
+启动器使用 OPSD 专用的 DeepSpeed ZeRO-2 配置，并显式设置
+`train_micro_batch_size_per_gpu=1`，与运行时逐条轨迹更新一致；Fast-WAM 原训练使用的共享
+DeepSpeed 配置保持不变。
 
 所有参数均保留在 YAML：Fault/severity 位于 `configs/fault/`，LoRA 位于 `configs/adapter/`，
 Teacher 输入位于 `configs/teacher_input/`，优化和 rollout 参数位于

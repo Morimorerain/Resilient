@@ -11,7 +11,7 @@ shift || true
 
 cd "${project_root}"
 exec accelerate launch \
-  --config_file scripts/accelerate_configs/accelerate_zero2_ds.yaml \
+  --config_file scripts/accelerate_configs/accelerate_opsd_zero2_ds.yaml \
   --num_processes "${num_processes}" \
   scripts/resilient/train_opsd.py \
   "opsd.distributed.num_processes=${num_processes}" \
