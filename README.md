@@ -234,6 +234,23 @@ and wrist images and annotates the faulted panels with the resolved fault metada
 Add `--create-only` to validate the comparison render and distributed task configuration without
 loading Fast-WAM or running episodes.
 
+To evaluate an OPSD-trained LoRA adapter, keep the released Fast-WAM checkpoint as the base and
+pass both the final adapter and its resolved training config:
+
+```bash
+python scripts/resilient/evaluate_fault.py \
+  --fault-config configs/fault/visual/wrist_camera_local_z.yaml \
+  --gpus 0,1,2,3,4,5,6,7 \
+  --checkpoint checkpoints/fastwam_release/libero_uncond_2cam224.pt \
+  --dataset-stats checkpoints/fastwam_release/libero_uncond_2cam224_dataset_stats.json \
+  --opsd-adapter runs/opsd/wrist_camera_local_z_30deg/checkpoints/state/step_00000005/adapter.pt \
+  --opsd-config runs/opsd/wrist_camera_local_z_30deg/resolved_config.yaml
+```
+
+`--opsd-adapter` and `--opsd-config` must be supplied together. The canonical output name adds
+the adapter checkpoint identifier, and the manifest records the base model, adapter, and config.
+Without these arguments, evaluation follows the unchanged Fast-WAM checkpoint path.
+
 For camera pose faults, translation is expressed in metres along the original camera-local axes;
 rotation uses right-handed local X-then-Y-then-Z rotations in degrees. MuJoCo cameras look along
 local `-Z`; local `+X` is raw-image right and local `+Y` is raw-image up. The plugin restores the
@@ -337,6 +354,7 @@ The following policy is mandatory:
 | --- | --- | --- | --- |
 | `EVALUATION.fault.pipeline.enabled` | `false` | Enable an ordered robot-fault pipeline in the LIBERO evaluator | The evaluator follows its exact upstream reset/step path when disabled |
 | `return_denoising_trace` in `FastWAM.infer_action` | `false` | Return detached pre-step Student latents/timesteps/deltas for OPSD | Return schema and action sampling are unchanged when false |
+| `EVALUATION.opsd_adapter.enabled` | `false` | Inject and load an OPSD LoRA adapter after the base Fast-WAM checkpoint | No modules are injected and base evaluation is unchanged when false |
 
 ## Development checks
 

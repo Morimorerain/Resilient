@@ -68,6 +68,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--gpus", type=parse_gpu_ids, required=True)
     parser.add_argument("--checkpoint", type=Path, required=True)
+    parser.add_argument(
+        "--opsd-adapter",
+        type=Path,
+        default=None,
+        help="Optional LoRA adapter.pt to apply after the base Fast-WAM checkpoint.",
+    )
+    parser.add_argument(
+        "--opsd-config",
+        type=Path,
+        default=None,
+        help="Resolved OPSD training YAML defining the adapter layout.",
+    )
     parser.add_argument("--dataset-stats", type=Path, default=None)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument(
@@ -141,9 +153,17 @@ def _slug(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "-", value).strip("-._") or "model"
 
 
-def build_run_name(fault_config: Mapping[str, Any], checkpoint: Path) -> str:
+def build_run_name(
+    fault_config: Mapping[str, Any],
+    checkpoint: Path,
+    opsd_adapter: Path | None = None,
+) -> str:
     pipeline = build_fault_pipeline(fault_config)
-    return f"{pipeline.slug()}__model-{_slug(checkpoint.stem)}"
+    name = f"{pipeline.slug()}__model-{_slug(checkpoint.stem)}"
+    if opsd_adapter is not None:
+        adapter_id = opsd_adapter.parent.name or opsd_adapter.stem
+        name += f"__opsd-{_slug(adapter_id)}"
+    return name
 
 
 def _portable_path(path: Path) -> str:
@@ -275,17 +295,27 @@ def main() -> int:
     checkpoint = resolve_path(args.checkpoint)
     if not checkpoint.is_file():
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint}")
+    if (args.opsd_adapter is None) != (args.opsd_config is None):
+        raise ValueError("--opsd-adapter and --opsd-config must be provided together.")
+    opsd_adapter = resolve_path(args.opsd_adapter) if args.opsd_adapter else None
+    opsd_config = resolve_path(args.opsd_config) if args.opsd_config else None
+    if opsd_adapter is not None and not opsd_adapter.is_file():
+        raise FileNotFoundError(f"OPSD adapter not found: {opsd_adapter}")
+    if opsd_config is not None and not opsd_config.is_file():
+        raise FileNotFoundError(f"OPSD config not found: {opsd_config}")
     dataset_stats = infer_dataset_stats(checkpoint, args.dataset_stats)
     fault_config = load_fault_config(args.fault_config, args.severity, args.seed)
     pipeline = build_fault_pipeline(fault_config)
     output_root = resolve_path(args.output_dir)
-    run_dir = output_root / build_run_name(fault_config, checkpoint)
+    run_dir = output_root / build_run_name(fault_config, checkpoint, opsd_adapter)
     run_dir.mkdir(parents=True, exist_ok=True)
     preview_suite = args.preview_suite or args.suites[0]
     configuration = {
         "fault": pipeline.metadata(),
         "fault_config": _portable_path(resolve_path(args.fault_config)),
         "checkpoint": _portable_path(checkpoint),
+        "opsd_adapter": _portable_path(opsd_adapter) if opsd_adapter else None,
+        "opsd_config": _portable_path(opsd_config) if opsd_config else None,
         "dataset_stats": _portable_path(dataset_stats),
         "gpus": list(args.gpus),
         "suites": list(args.suites),
@@ -328,6 +358,14 @@ def main() -> int:
         f"MULTIRUN.num_gpus={len(args.gpus)}",
         f"MULTIRUN.create_only={str(args.create_only).lower()}",
     ]
+    if opsd_adapter is not None and opsd_config is not None:
+        command.extend(
+            [
+                "EVALUATION.opsd_adapter.enabled=true",
+                f"EVALUATION.opsd_adapter.checkpoint={opsd_adapter}",
+                f"EVALUATION.opsd_adapter.training_config={opsd_config}",
+            ]
+        )
     runtime_env = os.environ.copy()
     runtime_env["CUDA_VISIBLE_DEVICES"] = ",".join(str(device) for device in args.gpus)
     runtime_env.setdefault("LIBERO_CONFIG_PATH", str(PROJECT_ROOT / "AILOG" / "libero"))

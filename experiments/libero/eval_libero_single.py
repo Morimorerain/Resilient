@@ -153,6 +153,49 @@ def _load_model_checkpoint(model: torch.nn.Module, ckpt: str) -> None:
     )
 
 
+def _load_opsd_adapter(model: torch.nn.Module, cfg: DictConfig) -> None:
+    adapter_cfg = cfg.EVALUATION.get("opsd_adapter", {})
+    if not bool(adapter_cfg.get("enabled", False)):
+        return
+    checkpoint = adapter_cfg.get("checkpoint")
+    training_config = adapter_cfg.get("training_config")
+    if checkpoint is None or training_config is None:
+        raise ValueError(
+            "Enabled EVALUATION.opsd_adapter requires checkpoint and training_config."
+        )
+    checkpoint_path = Path(
+        os.path.expanduser(os.path.expandvars(str(checkpoint)))
+    ).resolve()
+    config_path = Path(
+        os.path.expanduser(os.path.expandvars(str(training_config)))
+    ).resolve()
+    if not checkpoint_path.is_file():
+        raise FileNotFoundError(f"OPSD adapter checkpoint not found: {checkpoint_path}")
+    if not config_path.is_file():
+        raise FileNotFoundError(f"OPSD training config not found: {config_path}")
+
+    from resilient.opsd.adapters import FastWAMLoraConfig, load_fastwam_lora_adapter
+
+    training_cfg = OmegaConf.load(config_path)
+    if training_cfg.get("adapter") is None:
+        raise ValueError(f"OPSD training config has no adapter section: {config_path}")
+    lora_cfg = FastWAMLoraConfig.from_config(
+        OmegaConf.to_container(training_cfg.adapter, resolve=True)
+    )
+    audit = load_fastwam_lora_adapter(
+        model,
+        config=lora_cfg,
+        checkpoint=checkpoint_path,
+    )
+    logging.info(
+        "Loaded OPSD LoRA adapter %s using %s (%d targets, %d trainable parameters).",
+        checkpoint_path,
+        config_path,
+        audit["target_count"],
+        audit["trainable_parameters"],
+    )
+
+
 def _center_crop_resize(image: np.ndarray, width: int, height: int) -> np.ndarray:
     pil_image = Image.fromarray(image)
     src_w, src_h = pil_image.size
@@ -952,6 +995,7 @@ def eval_single_process(cfg: DictConfig):
     model_dtype = _mixed_precision_to_model_dtype(cfg.get("mixed_precision", "bf16"))
     model = instantiate(cfg.model, model_dtype=model_dtype, device=model_device)
     _load_model_checkpoint(model, str(cfg.ckpt))
+    _load_opsd_adapter(model, cfg)
     model = model.to(model_device).eval()
 
     dataset_stats_path = _resolve_dataset_stats_path(cfg)

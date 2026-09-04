@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Any
 
 import torch
@@ -153,3 +154,18 @@ def load_adapter_state_dict(model: nn.Module, state: Mapping[str, torch.Tensor])
             f"unexpected={sorted(provided - expected)[:10]}."
         )
     model.load_state_dict(dict(state), strict=False)
+
+
+def load_fastwam_lora_adapter(
+    model: nn.Module,
+    *,
+    config: FastWAMLoraConfig,
+    checkpoint: str | Path,
+) -> dict[str, Any]:
+    """Inject the training-time LoRA layout and strictly load its weights."""
+    audit = inject_fastwam_aligned_lora(model, config)
+    state = torch.load(Path(checkpoint), map_location="cpu", weights_only=True)
+    if not isinstance(state, Mapping):
+        raise TypeError("LoRA adapter checkpoint must contain a state-dict mapping.")
+    load_adapter_state_dict(model, state)
+    return audit

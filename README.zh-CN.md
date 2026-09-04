@@ -230,6 +230,23 @@ python scripts/resilient/evaluate_fault.py \
 故障图左上角标注完整参数。增加 `--create-only` 可在不加载 Fast-WAM、不运行 episode 的情况
 下验证对比图渲染和多 worker 任务配置。
 
+评测 OPSD 训练得到的 LoRA 时，发布版 Fast-WAM checkpoint 仍作为基座，同时传入最终 adapter
+及生成它的解析后训练配置：
+
+```bash
+python scripts/resilient/evaluate_fault.py \
+  --fault-config configs/fault/visual/wrist_camera_local_z.yaml \
+  --gpus 0,1,2,3,4,5,6,7 \
+  --checkpoint checkpoints/fastwam_release/libero_uncond_2cam224.pt \
+  --dataset-stats checkpoints/fastwam_release/libero_uncond_2cam224_dataset_stats.json \
+  --opsd-adapter runs/opsd/wrist_camera_local_z_30deg/checkpoints/state/step_00000005/adapter.pt \
+  --opsd-config runs/opsd/wrist_camera_local_z_30deg/resolved_config.yaml
+```
+
+`--opsd-adapter` 与 `--opsd-config` 必须同时提供。规范结果目录名会追加 adapter checkpoint
+标识，manifest 同时记录基座模型、adapter 和配置；不传这两个参数时仍走原 Fast-WAM 基线加载
+路径。
+
 相机平移单位为米，沿原始相机局部轴；姿态按局部 X、Y、Z 顺序进行右手系旋转，单位为度。
 MuJoCo 相机沿局部 `-Z` 观察，局部 `+X` 对应原始图像右方，局部 `+Y` 对应原始图像上方。
 插件在 Teacher 请求特权图像时会临时恢复原始位姿，配对过程不会推进仿真时间。
@@ -323,6 +340,7 @@ checkpoint、指标和来源记录均写入被忽略的 `runs/`。
 | --- | --- | --- | --- |
 | `EVALUATION.fault.pipeline.enabled` | `false` | 在 LIBERO evaluator 中启用有序机器人 Fault 管线 | 关闭时 evaluator 走完全相同的上游 reset/step 路径 |
 | `FastWAM.infer_action` 的 `return_denoising_trace` | `false` | 为 OPSD 返回分离的 Student 去噪前 latent/timestep/delta | 为 false 时返回结构与动作采样不变 |
+| `EVALUATION.opsd_adapter.enabled` | `false` | 在 Fast-WAM 基座 checkpoint 后注入并加载 OPSD LoRA | 关闭时不注入任何模块，基线评测不变 |
 
 ## 开发检查
 

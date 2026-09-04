@@ -15,6 +15,7 @@ from resilient.opsd.adapters import (
     adapter_state_dict,
     discover_fastwam_lora_targets,
     inject_fastwam_aligned_lora,
+    load_fastwam_lora_adapter,
     lora_disabled,
 )
 from resilient.opsd.losses import opsd_flow_loss
@@ -101,6 +102,26 @@ class FastWAMLoraTests(unittest.TestCase):
         self.assertTrue(
             all(not name.startswith("mot.") for name in adapter_state_dict(model))
         )
+
+    def test_saved_adapter_round_trip(self) -> None:
+        import tempfile
+        from pathlib import Path
+
+        config = FastWAMLoraConfig(rank=2, alpha=4)
+        source = _ToyFastWAM()
+        inject_fastwam_aligned_lora(source, config)
+        for name, parameter in source.named_parameters():
+            if ".lora_" in name:
+                nn.init.constant_(parameter, 0.125)
+        with tempfile.TemporaryDirectory() as directory:
+            checkpoint = Path(directory) / "adapter.pt"
+            torch.save(adapter_state_dict(source), checkpoint)
+            restored = _ToyFastWAM()
+            load_fastwam_lora_adapter(restored, config=config, checkpoint=checkpoint)
+            expected = adapter_state_dict(source)
+            actual = adapter_state_dict(restored)
+            self.assertEqual(set(expected), set(actual))
+            self.assertTrue(all(torch.equal(expected[key], actual[key]) for key in expected))
 
 
 class TeacherAndTraceTests(unittest.TestCase):

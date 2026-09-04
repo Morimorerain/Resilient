@@ -51,6 +51,13 @@ EVALUATION:
       faults: []
   fault_config_path: null
 
+  # Disabled by default. When enabled, inject and load an OPSD LoRA adapter
+  # after loading the unchanged Fast-WAM base checkpoint.
+  opsd_adapter:
+    enabled: false
+    checkpoint: null
+    training_config: null
+
 MULTIRUN:
   create_only: false
   task_file: null

@@ -31,6 +31,20 @@ FastWAM is pinned in `manifests/upstream.json`. Project-specific behavior should
   captured timestep/delta against `infer_action_scheduler.build_inference_schedule`. Both README
   files document the switch and its exact Fast-WAM-derived 10-step setting.
 
+## Optional OPSD LoRA evaluation loader
+
+- Affected files: `configs/sim_libero.yaml` and
+  `experiments/libero/eval_libero_single.py` (`eval_single_process`).
+- Reason: evaluation workers construct and own the Fast-WAM model, so a LoRA-only OPSD
+  checkpoint must be injected after the unchanged base checkpoint is loaded and before inference.
+- Switch: `EVALUATION.opsd_adapter.enabled`, default `false`; enabling it also requires an adapter
+  checkpoint and the resolved OPSD training config that defines the exact LoRA layout.
+- Baseline preservation: the disabled branch returns before importing PEFT, injecting modules, or
+  loading adapter weights. Existing Fast-WAM evaluation commands therefore retain their original
+  model structure and checkpoint path.
+- Coverage: `tests/test_opsd.py` checks strict adapter save/load round-tripping. Both README files
+  document the paired CLI arguments and base-plus-adapter loading order.
+
 For every future patch, record:
 
 - affected upstream file and function;
