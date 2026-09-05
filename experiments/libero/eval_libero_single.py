@@ -41,6 +41,7 @@ from fastwam.utils.pytorch_utils import set_global_seed
 from fastwam.datasets.lerobot.robot_video_dataset import DEFAULT_PROMPT
 from libero.libero import benchmark, get_libero_path
 from resilient.faults import FaultPipeline, FaultTransition, build_fault_pipeline
+from resilient.fault_detection import EpisodeLatentAccumulator
 from resilient.state_banks import assert_disjoint_manifests, load_manifest, load_task_states
 from experiments.libero.action_ensembler import ActionEnsembler
 
@@ -325,15 +326,34 @@ def _get_num_video_frames(cfg: DictConfig) -> int:
 
 
 def _validate_visualize_future_video_cfg(cfg: DictConfig) -> None:
-    if not bool(cfg.EVALUATION.get("visualize_future_video", False)):
+    visualize = bool(cfg.EVALUATION.get("visualize_future_video", False))
+    detection = bool(cfg.EVALUATION.get("fault_detection", {}).get("enabled", False))
+    if not visualize and not detection:
         return
 
     action_conditioned = cfg.model.video_dit_config.get("action_conditioned", None)
     if action_conditioned is not False:
         raise ValueError(
-            "EVALUATION.visualize_future_video=true requires "
+            "Future-video visualization and fault detection require "
             "model.video_dit_config.action_conditioned=false."
         )
+    if detection:
+        action_horizon = cfg.EVALUATION.get("action_horizon", None)
+        model_action_horizon = int(cfg.data.train.num_frames) - 1
+        if action_horizon is None:
+            action_horizon = model_action_horizon
+        replan_steps = int(cfg.EVALUATION.get("replan_steps", 5))
+        if int(action_horizon) != model_action_horizon:
+            raise ValueError(
+                "Fault detection requires the checkpoint's complete training action horizon "
+                f"({model_action_horizon}), got {action_horizon}."
+            )
+        if replan_steps != int(action_horizon):
+            raise ValueError(
+                "Fault detection requires EVALUATION.replan_steps to equal the complete "
+                f"action horizon ({action_horizon}), got {replan_steps}. This guarantees that "
+                "Z_real covers the same future window as Z_pred."
+            )
 
 
 def _select_predicted_future_frames(pred_video: list[Image.Image], cfg: DictConfig) -> list[Image.Image]:
@@ -412,7 +432,7 @@ def _predict_action_chunk(
     input_w: int,
     input_h: int,
     model_device: str,
-) -> tuple[np.ndarray, dict, Optional[list[Image.Image]]]:
+) -> tuple[np.ndarray, dict, Optional[list[Image.Image]], Optional[torch.Tensor], torch.Tensor]:
     num_inference_steps_cfg = cfg.EVALUATION.get("num_inference_steps", None)
     if num_inference_steps_cfg is None:
         num_inference_steps = int(cfg.get("eval_num_inference_steps", 20))
@@ -449,8 +469,10 @@ def _predict_action_chunk(
         "tiled": bool(cfg.EVALUATION.get("tiled", False)),
     }
     visualize_future_video = bool(cfg.EVALUATION.get("visualize_future_video", False))
+    fault_detection = bool(cfg.EVALUATION.get("fault_detection", {}).get("enabled", False))
     predicted_future_frames = None
-    if visualize_future_video:
+    predicted_video_latents = None
+    if visualize_future_video or fault_detection:
         infer_kwargs["num_video_frames"] = _get_num_video_frames(cfg)
     elif "num_video_frames" in inspect.signature(model.infer_action).parameters:
         infer_kwargs["num_video_frames"] = _get_num_video_frames(cfg)
@@ -469,7 +491,26 @@ def _predict_action_chunk(
         )
 
     with torch.no_grad():
-        if visualize_future_video:
+        if fault_detection:
+            action_kwargs = dict(infer_kwargs)
+            action_kwargs.pop("num_video_frames", None)
+            pred = model.infer_action(
+                **action_kwargs,
+                compile_action_infer=compile_action_infer,
+            )
+            video_pred = model.infer_joint(
+                **infer_kwargs,
+                test_action_with_infer_action=False,
+                compile_action_infer=compile_action_infer,
+                return_video_latents=True,
+                decode_video=visualize_future_video,
+            )
+            predicted_video_latents = video_pred["video_latents"]
+            if visualize_future_video:
+                predicted_future_frames = _select_predicted_future_frames(
+                    video_pred["video"], cfg
+                )
+        elif visualize_future_video:
             pred = model.infer_joint(
                 **infer_kwargs,
                 compile_action_infer=compile_action_infer,
@@ -490,7 +531,7 @@ def _predict_action_chunk(
     action = invert_gripper_action(action)
     if bool(cfg.EVALUATION.get("binarize_gripper", False)):
         action[..., -1] = np.sign(action[..., -1])
-    return action, imgs, predicted_future_frames
+    return action, imgs, predicted_future_frames, predicted_video_latents, image.detach().cpu()
 
 
 def _get_max_steps(task_suite_name: str) -> int:
@@ -520,13 +561,28 @@ def run_single_episode(
     input_h: int,
     model_device: str,
     fault_pipeline: FaultPipeline | None = None,
-) -> tuple[bool, list, list[dict[str, Any]], Optional[float]]:
+) -> tuple[
+    bool,
+    list,
+    list[dict[str, Any]],
+    Optional[float],
+    dict[str, float | int | None] | None,
+    np.ndarray | None,
+]:
     max_steps = _get_max_steps(cfg.EVALUATION.task_suite_name)
     replan_steps = int(cfg.EVALUATION.get("replan_steps", 5))
     num_steps_wait = int(cfg.EVALUATION.get("num_steps_wait", 5))
     use_action_ensembler = bool(cfg.EVALUATION.get("use_action_ensembler", False))
     visualize_future_video = bool(cfg.EVALUATION.get("visualize_future_video", False))
+    fault_detection_cfg = cfg.EVALUATION.get("fault_detection", {})
+    fault_detection = bool(fault_detection_cfg.get("enabled", False))
     capture_steps = set(_get_future_frame_capture_steps(cfg)[1:])
+    expected_metric_frames = _get_num_video_frames(cfg)
+    latent_accumulator = None
+    if fault_detection:
+        latent_accumulator = EpisodeLatentAccumulator(
+            pair_metrics=list(fault_detection_cfg.get("pair_metrics", ["lpe", "lcd", "rm"]))
+        )
 
     pipeline = fault_pipeline or FaultPipeline(pipeline_id="none", seed=0, faults=[])
     episode_context = pipeline.context(episode_index=episode_idx, step_index=0)
@@ -548,6 +604,7 @@ def run_single_episode(
     episode_future_clip_psnr: list[float] = []
     pending_actions: list[list[float]] = []
     current_predicted_future_clip: Optional[dict[str, Any]] = None
+    current_latent_clip: Optional[dict[str, Any]] = None
     current_replan_step = 0
     current_replan_idx = -1
 
@@ -585,7 +642,13 @@ def run_single_episode(
             continue
 
         if len(pending_actions) == 0:
-            action_chunk, imgs, predicted_future_frames = _predict_action_chunk(
+            (
+                action_chunk,
+                imgs,
+                predicted_future_frames,
+                predicted_video_latents,
+                current_model_image,
+            ) = _predict_action_chunk(
                 obs=obs,
                 task_description=task_description,
                 model=model,
@@ -605,6 +668,13 @@ def run_single_episode(
                 }
             else:
                 current_predicted_future_clip = None
+            if predicted_video_latents is not None:
+                current_latent_clip = {
+                    "predicted": predicted_video_latents,
+                    "real_frames": [current_model_image],
+                }
+            else:
+                current_latent_clip = None
             current_replan_step = 0
             if use_action_ensembler:
                 ensembler.add_actions(action_chunk, t)
@@ -639,11 +709,57 @@ def run_single_episode(
         else:
             obs, _, done, _ = env.step(policy_action)
             raw_obs = obs
-        if visualize_future_video and current_predicted_future_clip is not None:
+        if (visualize_future_video and current_predicted_future_clip is not None) or (
+            fault_detection and current_latent_clip is not None
+        ):
             current_replan_step += 1
             if current_replan_step in capture_steps:
-                current_predicted_future_clip["gt_frames"].append(get_libero_image(obs))
+                if current_predicted_future_clip is not None:
+                    current_predicted_future_clip["gt_frames"].append(get_libero_image(obs))
+                if current_latent_clip is not None:
+                    real_image, _, _ = _obs_to_model_input(
+                        obs,
+                        cfg=cfg,
+                        processor=processor,
+                        width=input_w,
+                        height=input_h,
+                        device=model_device,
+                        dtype=model.torch_dtype,
+                    )
+                    current_latent_clip["real_frames"].append(real_image.detach().cpu())
             if done or len(pending_actions) == 0:
+                if current_latent_clip is not None:
+                    real_frames = current_latent_clip["real_frames"]
+                    if len(real_frames) == expected_metric_frames:
+                        real_video = torch.stack(
+                            [frame.squeeze(0) for frame in real_frames], dim=1
+                        ).unsqueeze(0)
+                        with torch.no_grad():
+                            real_latents = model._encode_video_latents(
+                                real_video.to(device=model_device, dtype=model.torch_dtype),
+                                tiled=False,
+                            ).detach().cpu().float()
+                        predicted_latents = current_latent_clip["predicted"].float()
+                        if bool(fault_detection_cfg.get("exclude_conditioning_latent", True)):
+                            predicted_latents = predicted_latents[:, :, 1:]
+                            real_latents = real_latents[:, :, 1:]
+                        if latent_accumulator is None:
+                            raise RuntimeError("Fault-detection accumulator was not initialized.")
+                        latent_accumulator.update(predicted_latents, real_latents)
+                    else:
+                        logging.info(
+                            "Skip incomplete latent clip: episode=%s frames=%s expected=%s done=%s",
+                            episode_idx,
+                            len(real_frames),
+                            expected_metric_frames,
+                            done,
+                        )
+                    current_latent_clip = None
+                if current_predicted_future_clip is None:
+                    if done:
+                        break
+                    t += 1
+                    continue
                 expected_frame_count = 1 + sum(
                     1 for capture_step in capture_steps if capture_step <= current_replan_step
                 )
@@ -697,7 +813,19 @@ def run_single_episode(
     episode_mean_psnr = (
         float(np.mean(episode_future_clip_psnr)) if len(episode_future_clip_psnr) > 0 else None
     )
-    return bool(done), replay_images, predicted_future_video_clips, episode_mean_psnr
+    detection_metrics = None
+    residual_prototype = None
+    if latent_accumulator is not None:
+        detection_metrics, residual_prototype = latent_accumulator.finalize()
+        detection_metrics["episode_index"] = episode_idx
+    return (
+        bool(done),
+        replay_images,
+        predicted_future_video_clips,
+        episode_mean_psnr,
+        detection_metrics,
+        residual_prototype,
+    )
 
 
 def run_single_task(
@@ -716,6 +844,7 @@ def run_single_task(
 ) -> dict:
     env, task_description = get_libero_env(task, LIBERO_ENV_RESOLUTION, cfg.get("seed"))
     visualize_future_video = bool(cfg.EVALUATION.get("visualize_future_video", False))
+    fault_detection = bool(cfg.EVALUATION.get("fault_detection", {}).get("enabled", False))
     results = {
         "successes": 0,
         "failure_episodes": [],
@@ -725,6 +854,18 @@ def run_single_task(
     if visualize_future_video:
         results["episode_future_video_psnr"] = []
         results["future_video_psnr_mean"] = None
+    residual_prototypes = []
+    residual_episode_indices = []
+    if fault_detection:
+        results["fault_detection"] = {
+            "schema_version": 1,
+            "episodes": [],
+            "prediction_target": "final_video_diffusion_latent",
+            "real_target": "same_vae_encoded_observation_clip",
+            "conditioning_latent_excluded": bool(
+                cfg.EVALUATION.fault_detection.get("exclude_conditioning_latent", True)
+            ),
+        }
 
     fault_config_path = cfg.EVALUATION.get("fault_config_path")
     if fault_config_path is None:
@@ -737,7 +878,14 @@ def run_single_task(
     results["fault"] = fault_pipeline.metadata()
 
     for trial_idx in range(int(cfg.EVALUATION.num_trials)):
-        success, replay_images, predicted_future_video_clips, episode_mean_psnr = run_single_episode(
+        (
+            success,
+            replay_images,
+            predicted_future_video_clips,
+            episode_mean_psnr,
+            detection_metrics,
+            residual_prototype,
+        ) = run_single_episode(
             env=env,
             initial_state=initial_states[trial_idx],
             task_description=task_description,
@@ -759,13 +907,20 @@ def run_single_task(
         if visualize_future_video:
             results["episode_future_video_psnr"].append(episode_mean_psnr)
 
-        save_rollout_video(
-            video_dir,
-            replay_images,
-            f"task{cfg.EVALUATION.task_id}_trial{trial_idx}",
-            success=success,
-            task_description=task_description,
-        )
+        if fault_detection and detection_metrics is not None:
+            results["fault_detection"]["episodes"].append(detection_metrics)
+            if residual_prototype is not None:
+                residual_episode_indices.append(trial_idx)
+                residual_prototypes.append(residual_prototype)
+
+        if bool(cfg.EVALUATION.get("save_rollout_videos", True)):
+            save_rollout_video(
+                video_dir,
+                replay_images,
+                f"task{cfg.EVALUATION.task_id}_trial{trial_idx}",
+                success=success,
+                task_description=task_description,
+            )
         if visualize_future_video:
             if len(predicted_future_video_clips) == 0:
                 logging.warning(
@@ -809,6 +964,18 @@ def run_single_task(
         valid_episode_psnr = [x for x in results["episode_future_video_psnr"] if x is not None]
         if len(valid_episode_psnr) > 0:
             results["future_video_psnr_mean"] = float(np.mean(valid_episode_psnr))
+    if fault_detection:
+        if residual_prototypes:
+            prototypes = np.stack(residual_prototypes).astype(np.float32, copy=False)
+        else:
+            prototypes = np.empty((0, 0), dtype=np.float32)
+        residual_path = video_dir.parent / f"fault_detection_residuals_task{cfg.EVALUATION.task_id}.npz"
+        np.savez_compressed(
+            residual_path,
+            episode_indices=np.asarray(residual_episode_indices, dtype=np.int64),
+            prototypes=prototypes,
+        )
+        results["fault_detection"]["residual_prototypes_file"] = residual_path.name
     return results
 
 

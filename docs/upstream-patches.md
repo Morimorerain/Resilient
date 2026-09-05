@@ -45,6 +45,24 @@ FastWAM is pinned in `manifests/upstream.json`. Project-specific behavior should
 - Coverage: `tests/test_opsd.py` checks strict adapter save/load round-tripping. Both README files
   document the paired CLI arguments and base-plus-adapter loading order.
 
+## Optional Video DiT latent fault metrics
+
+- Affected files: `src/fastwam/models/wan22/fastwam.py` (`FastWAM.infer_joint`),
+  `configs/sim_libero.yaml`, and `experiments/libero/eval_libero_single.py`.
+- Reason: the final scheduler-updated video latent exists only inside `infer_joint`; decoding it to
+  pixels and encoding it again would not recover the exact Video DiT prediction. The LIBERO runner
+  also owns the executed observations needed to construct the time-aligned real VAE latent.
+- Switches: `FastWAM.infer_joint(return_video_latents=False, decode_video=True)` and
+  `EVALUATION.fault_detection.enabled=false`. Rollout video saving is independently controlled by
+  `EVALUATION.save_rollout_videos=true`.
+- Baseline preservation: at the defaults, `infer_joint` still decodes and returns exactly `video`
+  plus `action`; the evaluator never invokes joint video inference, real-clip VAE encoding, metric
+  aggregation, or residual serialization. Rollout videos remain enabled as before.
+- Coverage: `tests/test_fault_detection.py` checks the API defaults, metric definitions, rank
+  statistics, uncertainty export, and every first-version plot. Both README files document the
+  complete 32-action alignment protocol and warn that its success rate is not the standard
+  10-action-replanning benchmark result.
+
 For every future patch, record:
 
 - affected upstream file and function;

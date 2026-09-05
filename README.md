@@ -281,6 +281,80 @@ local `-Z`; local `+X` is raw-image right and local `+Y` is raw-image up. The pl
 nominal pose temporarily when privileged observations are requested and never advances the
 simulator while making the pair.
 
+## Fault-severity curves from Video DiT latents
+
+`scripts/resilient/evaluate_fault_severity.py` evaluates one fixed LIBERO task over an ordered
+severity sweep. Each severity uses the same 50 initial states by default. The released Fast-WAM
+checkpoint is the default model; another compatible checkpoint or a base-plus-OPSD adapter can be
+selected explicitly. Severity jobs are assigned to the requested physical GPUs, so independent
+severity values may run in parallel.
+
+For example, evaluate wrist-camera local +Z rotations of 10, 20, and 30 degrees on Spatial task 0:
+
+```bash
+python scripts/resilient/evaluate_fault_severity.py \
+  --fault-config configs/fault/visual/wrist_camera_local_z.yaml \
+  --severities 10 20 30 \
+  --suite libero_spatial \
+  --task-id 0 \
+  --gpus 0,1,2
+```
+
+The default root is the Git-ignored `evaluate_results/fault_detection/`; `--output-dir` selects a
+different root. The canonical study directory records the fault family, target, severity field,
+checkpoint, suite, and task. It contains an immutable `study_manifest.json`, one reproducible
+subdirectory per severity, `metrics_summary.json`, `metrics_summary.csv`, residual matrix data,
+human-readable `metrics_summary.md`, and one PNG per requested metric. Episode videos are disabled by default to avoid large incidental
+outputs; add `--save-videos` when they are needed. Interrupted studies reuse a severity only after
+both its result JSON and residual prototype file exist.
+
+The metric list and statistical parameters live in
+`configs/fault_detection/latent_v1.yaml`; `--metrics ...` can override only the selected metrics.
+The first version provides:
+
+| Metric | Definition and aggregation |
+| --- | --- |
+| LPE | Mean squared error between aligned future `Z_pred` and `Z_real` |
+| LCD | One minus flattened cosine similarity between the aligned latents |
+| RM | Mean absolute value of `R = Z_real - Z_pred` |
+| RCS | Cosine similarity of each episode residual prototype against the same episode at clean severity |
+| Residual matrix | Mean paired-episode cosine for every severity pair, plus a 50x50 episode heatmap for each severity |
+| RTC | Mean cosine similarity between consecutive complete-window residuals within an episode |
+| Spearman rho | Rank correlation between severity and episode RM, with deterministic bootstrap uncertainty |
+| FaultScore | Episode RM standardized by the clean-run RM mean and sample standard deviation |
+| ROC-AUC | Clean-versus-fault discrimination from RM, separately for each nonzero severity, with deterministic bootstrap uncertainty |
+
+LPE, LCD, RM, RCS, RTC, and FaultScore are first averaged within an episode and then summarized
+over episodes. The JSON/CSV records count, mean, sample variance, standard deviation, and SEM.
+Error-bar plots use +/- one standard deviation by default; set `error_bar: sem` in the metrics YAML
+for SEM. Spearman and ROC-AUC store bootstrap variance. FaultScore and ROC-AUC require a clean run;
+the default configuration automatically adds severity 0 if the command omitted it. Pass
+`--no-auto-clean` to require it explicitly.
+
+Fast-WAM's Video DiT predicts a vector field at each diffusion step, not a final latent directly.
+Here `Z_pred` means the final `latents_video` after the original video scheduler completes all
+denoising steps. `Z_real` is produced by the same frozen VAE from the actually observed, faulted
+clip. With the released model, the clip contains 9 video frames aligned to action steps
+`0,4,...,32`. The script therefore executes each complete 32-action prediction window before
+replanning; incomplete terminal windows are excluded. Both tensors exclude temporal latent index
+0 because it is the encoded conditioning image, leaving only future latents. This full-window
+protocol is necessary for shape and time alignment, but its success rate is not directly
+comparable with the standard Fast-WAM benchmark, which replans after 10 actions.
+
+The action used by the environment still comes from the unchanged `infer_action` path. Joint
+inference is called separately only to collect the video prediction. The opt-in evaluator setting
+`EVALUATION.fault_detection.enabled` defaults to `false`; Fast-WAM's added
+`return_video_latents=false` and `decode_video=true` defaults preserve its original return keys and
+decoding. New aligned clip metrics can be registered in
+`src/resilient/fault_detection/metrics.py`; cross-severity metrics and plots remain isolated in
+`study.py`. Existing unseen-state manifests can be supplied with `--state-bank-manifest` and
+`--training-state-manifest` exactly as in fault evaluation.
+
+The integration smoke test used Linux, CUDA 12.8, bf16, and one NVIDIA RTX 6000 Ada 48 GB. The
+worker occupied approximately 25.2 GB after compilation. Each concurrent severity owns one GPU;
+additional listed GPUs increase severity-level parallelism rather than splitting one episode. A
+complete 50-episode severity sweep has not yet been timed, so no full-run duration is claimed.
+
 ## OPSD-Flow adaptation for Fast-WAM
 
 The implementation is a clean adaptation of the OPSD idea from
@@ -394,6 +468,8 @@ The following policy is mandatory:
 | `EVALUATION.fault.pipeline.enabled` | `false` | Enable an ordered robot-fault pipeline in the LIBERO evaluator | The evaluator follows its exact upstream reset/step path when disabled |
 | `return_denoising_trace` in `FastWAM.infer_action` | `false` | Return detached pre-step Student latents/timesteps/deltas for OPSD | Return schema and action sampling are unchanged when false |
 | `EVALUATION.opsd_adapter.enabled` | `false` | Inject and load an OPSD LoRA adapter after the base Fast-WAM checkpoint | No modules are injected and base evaluation is unchanged when false |
+| `EVALUATION.fault_detection.enabled` | `false` | Collect time-aligned Video DiT/VAE latent metrics during LIBERO evaluation | No joint video inference, latent encoding, or metric files are produced when false |
+| `return_video_latents` / `decode_video` in `FastWAM.infer_joint` | `false` / `true` | Expose final video latents and optionally avoid decoding for fault metrics | Original `video`/`action` result and decoding are unchanged at defaults |
 
 ## Development checks
 

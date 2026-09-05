@@ -1,0 +1,28 @@
+# Fault-detection metrics and study-level statistics.
+metrics:
+  - lpe
+  - lcd
+  - rm
+  - rcs
+  - residual_matrix
+  - rtc
+  - spearman_rho
+  - fault_score
+  - roc_auc
+
+# Metrics evaluated online for each aligned Z_pred/Z_real clip.
+pair_metrics: [lpe, lcd, rm]
+
+# Fast-WAM predicts 32 actions and 9 video frames (one frame per 4 actions).
+# Executing the complete action horizon is required for a shape-aligned Z_real.
+action_horizon: 32
+exclude_conditioning_latent: true
+
+# FaultScore and ROC-AUC use the zero-severity run as the clean reference.
+clean_severity: 0.0
+auto_include_clean: true
+
+# Variance is always exported. Error bars use standard deviation by default.
+error_bar: std
+bootstrap_samples: 1000
+bootstrap_seed: 42

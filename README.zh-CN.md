@@ -273,6 +273,72 @@ python scripts/resilient/generate_libero_validation_states.py \
 MuJoCo 相机沿局部 `-Z` 观察，局部 `+X` 对应原始图像右方，局部 `+Y` 对应原始图像上方。
 插件在 Teacher 请求特权图像时会临时恢复原始位姿，配对过程不会推进仿真时间。
 
+## 基于 Video DiT latent 的 Fault severity 曲线
+
+`scripts/resilient/evaluate_fault_severity.py` 会对一个固定 LIBERO task 依次测试多个 severity。
+默认每个 severity 使用相同的 50 个初始状态。默认模型是官方发布的 Fast-WAM 基座 checkpoint；
+也可显式指定其他兼容 checkpoint，或指定 Fast-WAM 基座加 OPSD adapter。不同 severity 会分配给
+所指定的物理 GPU，因而可并行运行。
+
+例如，在 Spatial task 0 上测试手腕相机绕局部 +Z 轴旋转 10、20、30 度：
+
+```bash
+python scripts/resilient/evaluate_fault_severity.py \
+  --fault-config configs/fault/visual/wrist_camera_local_z.yaml \
+  --severities 10 20 30 \
+  --suite libero_spatial \
+  --task-id 0 \
+  --gpus 0,1,2
+```
+
+默认输出根目录是 Git 已忽略的 `evaluate_results/fault_detection/`，可通过 `--output-dir` 修改。
+规范 study 目录名包含 Fault family、目标、severity 字段、checkpoint、suite 和 task。目录内包含
+不可变的 `study_manifest.json`、每个 severity 的可复现实验子目录、`metrics_summary.json`、
+`metrics_summary.csv`、便于阅读的 `metrics_summary.md`、残差矩阵数据和每项指标的 PNG。默认不保存 episode 视频，以免产生大量
+非必要文件；需要时添加 `--save-videos`。断点续跑只会复用同时存在结果 JSON 和残差 prototype
+文件的完整 severity。
+
+指标列表与统计参数单独位于 `configs/fault_detection/latent_v1.yaml`；`--metrics ...` 仅覆盖待选
+指标。第一版包含：
+
+| 指标 | 定义与聚合方式 |
+| --- | --- |
+| LPE | 对齐后的未来 `Z_pred` 与 `Z_real` 的均方误差 |
+| LCD | 两个对齐 latent 展平后的 1 减余弦相似度 |
+| RM | `R = Z_real - Z_pred` 的平均绝对值 |
+| RCS | 每个 episode 的残差 prototype 与 clean severity 下同一 episode prototype 的余弦相似度 |
+| Residual matrix | 每对 severity 的配对 episode 余弦均值，并为每个 severity 输出 50x50 episode 热图 |
+| RTC | 一个 episode 内相邻完整预测窗口残差的平均余弦相似度 |
+| Spearman rho | severity 与 episode RM 的等级相关系数，并通过确定性 bootstrap 估计不确定性 |
+| FaultScore | 使用 clean run 的 RM 均值和样本标准差对 episode RM 标准化 |
+| ROC-AUC | 分别比较 clean 与各非零 severity 的 RM，并通过确定性 bootstrap 估计不确定性 |
+
+LPE、LCD、RM、RCS、RTC 和 FaultScore 先在单个 episode 内聚合，再对多个 episode 统计。JSON/CSV
+会记录有效数量、均值、样本方差、标准差和 SEM。误差棒默认使用正负一个标准差；如需 SEM，
+在指标 YAML 中设置 `error_bar: sem`。Spearman 与 ROC-AUC 记录 bootstrap 方差。FaultScore 和
+ROC-AUC 必须有 clean run；默认配置会在命令未包含时自动补充 severity 0。使用
+`--no-auto-clean` 可要求调用者显式提供。
+
+Fast-WAM 的 Video DiT 在每个扩散步输出的是向量场，而不是最终 latent。这里的 `Z_pred` 是原始
+video scheduler 完成全部去噪后得到的最终 `latents_video`；`Z_real` 是用同一个冻结 VAE 对实际
+观测到的 Fault 图像序列编码而来。发布模型使用与 action step `0,4,...,32` 对齐的 9 帧视频，
+所以脚本会完整执行每个 32-action 预测窗口后再重规划，episode 结尾不完整的窗口不计入指标。
+两个 latent 都排除时间维第 0 项，因为它是输入条件图像，只比较未来 latent。该完整窗口协议
+保证形状和时间严格对齐，但它得到的成功率不能与每 10 个 action 重规划的标准 Fast-WAM 基线
+成功率直接比较。
+
+环境实际执行的动作仍来自未改变的 `infer_action` 路径；联合推理只额外用于采集视频预测。
+评测开关 `EVALUATION.fault_detection.enabled` 默认关闭；Fast-WAM 新增参数的默认值为
+`return_video_latents=false`、`decode_video=true`，保持原来的返回键与解码行为。新的对齐 clip
+指标可注册到 `src/resilient/fault_detection/metrics.py`，跨 severity 指标与绘图隔离在
+`study.py`。也可像普通 Fault 评测一样传入 `--state-bank-manifest` 和
+`--training-state-manifest` 使用未见状态库。
+
+真实集成烟测环境为 Linux、CUDA 12.8、bf16 和一张 NVIDIA RTX 6000 Ada 48 GB；编译完成后
+worker 约占用 25.2 GB 显存。每个并行 severity 独占一张 GPU，增加 GPU 数量会提高 severity
+级并行度，并不会切分单个 episode。目前尚未计时完整的每 severity 50-episode sweep，因此不
+声明完整运行时长。
+
 ## 面向 Fast-WAM 的 OPSD-Flow 适配
 
 本实现参考 `manifests/upstream.json` 固定版本的 <https://github.com/siyan-zhao/OPSD>，采用
@@ -377,6 +443,8 @@ rank。每个 task 的 LIBERO 初始状态 0--49 恰好各使用一次；seed �
 | `EVALUATION.fault.pipeline.enabled` | `false` | 在 LIBERO evaluator 中启用有序机器人 Fault 管线 | 关闭时 evaluator 走完全相同的上游 reset/step 路径 |
 | `FastWAM.infer_action` 的 `return_denoising_trace` | `false` | 为 OPSD 返回分离的 Student 去噪前 latent/timestep/delta | 为 false 时返回结构与动作采样不变 |
 | `EVALUATION.opsd_adapter.enabled` | `false` | 在 Fast-WAM 基座 checkpoint 后注入并加载 OPSD LoRA | 关闭时不注入任何模块，基线评测不变 |
+| `EVALUATION.fault_detection.enabled` | `false` | 在 LIBERO 评测中采集严格对齐的 Video DiT/VAE latent 指标 | 关闭时不执行联合视频推理、真实 latent 编码或指标输出 |
+| `FastWAM.infer_joint` 的 `return_video_latents` / `decode_video` | `false` / `true` | 暴露最终视频 latent，并允许 Fault 指标跳过图像解码 | 默认值保持原来的 `video`/`action` 返回与解码行为 |
 
 ## 开发检查
 

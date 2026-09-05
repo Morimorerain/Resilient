@@ -26,6 +26,15 @@ EVALUATION:
   binarize_gripper: true
   use_action_ensembler: false
   visualize_future_video: false
+  save_rollout_videos: true
+
+  # Disabled by default. When enabled, the evaluator captures the final Video
+  # DiT diffusion latent and compares it with a time-aligned VAE encoding of
+  # observations collected over one complete action horizon.
+  fault_detection:
+    enabled: false
+    pair_metrics: [lpe, lcd, rm]
+    exclude_conditioning_latent: true
 
   # Action inference
   action_horizon: null
