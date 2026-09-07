@@ -205,13 +205,16 @@ On 2026-09-04, `libero_spatial` task 0 completed successfully in its single epis
 
 ## Reusable fault pipeline and evaluation
 
-Fault definitions are model-independent YAML files under `configs/fault/`. A `FaultPipeline`
-orders plugins with reset, observation, action, pre-step, post-step, suspend, checkpoint-state,
-and detach hooks. This supports later image occlusion/contamination, actuator limits, joint-motion
-degradation, and dynamics faults without adding fault-specific branches to Fast-WAM. Every fault
-has a stable `family` and a separate physical `severity` (`name`, numeric `value`, `unit`, and an
-optional categorical `level`), so +10/+20/+30 degree rotations are three severities of the same
-fault family.
+Fault definitions are model-independent YAML files under `configs/fault/`. At environment
+construction, `get_libero_env(..., fault_pipeline=pipeline)` installs an enabled pipeline into a
+transparent `FaultedEnvironment`. The environment then owns reset, state-load, observation,
+action, simulator-step, suspend, checkpoint-state, and detach lifecycles. A policy only calls the
+normal `reset`, `set_init_state`, and `step` API; it contains no fault hook calls. This supports
+later image occlusion/contamination, actuator limits, joint-motion degradation, dynamics faults,
+and ordered compound faults without adding fault-specific branches to Fast-WAM or another policy.
+Every fault has a stable `family` and a separate physical `severity` (`name`, numeric `value`,
+`unit`, and an optional categorical `level`), so +10/+20/+30 degree rotations are three severities
+of the same fault family.
 
 The committed camera example is `configs/fault/visual/wrist_camera_local_z.yaml`. Evaluate its
 default +30 degree severity on four GPUs with:
@@ -253,11 +256,12 @@ Without these arguments, evaluation follows the unchanged Fast-WAM checkpoint pa
 
 ### Joint-motion fault demonstration
 
-The `structure.joint_motion` family applies a configurable motion-retention law after each LIBERO
-control step. It accepts one or more MuJoCo joint names. The first built-in law is `proportional`;
-the example retains 50% of `robot0_joint1` displacement and velocity on every 20 Hz control step.
-The degradation law has its own registry, so future deterministic non-linear functions do not
-require changes to the simulator runner or model code.
+The `structure.joint_motion` family is installed by the environment when the MuJoCo simulator is
+created. It acts at the environment dynamics-step boundary, independently of `OSC_POSE`, Fast-WAM,
+OPSD, or any later controller. It accepts one or more MuJoCo joint names. The first built-in law is
+`proportional`; the example retains 50% of `robot0_joint1` displacement and velocity produced by
+every environment control step. The degradation law has its own registry, so future deterministic
+non-linear functions do not require changes to the simulator runner or model code.
 
 Generate a time-aligned clean/fault `OSC_POSE` comparison with:
 
@@ -278,17 +282,18 @@ end-effector separation. The default ignored output is
 `clean_vs_fault.mp4` and `summary.json`. Use `--render-camera`, `--osc-command`, phase-length, seed,
 resolution, FPS, and `--output-root` arguments to reproduce or change the visualization.
 
-The proportional law is defined per control step:
+The proportional law is defined at the environment dynamics-step boundary:
 
 ```text
 q_fault_after = q_before + retention * (q_nominal_after - q_before)
 ```
 
 It also scales the selected joint velocity by `retention`. This intentionally models kinematic
-motion loss rather than actuator torque loss. Because `OSC_POSE` remains closed loop and can
-compensate on later steps, the final faulty joint displacement is not expected to equal exactly
-`retention * clean_final_displacement`. The original no-fault and camera-fault paths remain
-unchanged unless this fault family is selected.
+motion loss rather than actuator torque loss. The installation survives environment resets and is
+removed only when the environment closes. Multiple configured simulator faults compose in YAML
+order. Because a closed-loop controller can react during subsequent control steps, the final
+faulty joint displacement is not expected to equal exactly `retention * clean_final_displacement`.
+The original no-fault path remains unchanged when no pipeline is installed.
 
 For an unseen-state evaluation of an existing checkpoint, first generate a validation state bank
 from seeded LIBERO resets. The command also reconstructs the exact official-state exposure and

@@ -16,7 +16,15 @@ DATE_TIME = time.strftime("%Y_%m_%d-%H_%M_%S")
 LIBERO_ENV_RESOLUTION = 256  # resolution used to render training data
 
 
-def get_libero_env(task, resolution, seed, env_num=1):
+def get_libero_env(
+    task,
+    resolution,
+    seed,
+    env_num=1,
+    *,
+    fault_pipeline=None,
+    fault_episode_index=0,
+):
     """Initializes and returns the LIBERO environment, along with the task description."""
     task_description = task.language
     task_bddl_file = (
@@ -36,25 +44,22 @@ def get_libero_env(task, resolution, seed, env_num=1):
     env.seed(
         seed
     )  # IMPORTANT: seed seems to affect object positions even when using fixed initial state
+    if fault_pipeline is not None:
+        from resilient.faults import install_fault_pipeline
+
+        env = install_fault_pipeline(
+            env,
+            fault_pipeline,
+            initial_episode_index=fault_episode_index,
+        )
     return env, task_description
 
 
 def capture_libero_observation(env):
     """Capture a fresh observation after a post-step fault mutates simulator state."""
-    current = env
-    visited = set()
-    while id(current) not in visited:
-        visited.add(id(current))
-        method = getattr(current, "_get_observations", None)
-        if callable(method):
-            try:
-                return method(force_update=True)
-            except TypeError:
-                return method()
-        current = getattr(current, "env", None)
-        if current is None:
-            break
-    raise AttributeError("LIBERO environment does not expose _get_observations().")
+    from resilient.faults.environment import capture_current_observation
+
+    return capture_current_observation(env)
 
 def get_libero_dummy_action():
     """Get dummy/no-op action, used to roll out the simulation while the robot does nothing."""

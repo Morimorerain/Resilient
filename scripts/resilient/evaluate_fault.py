@@ -263,22 +263,27 @@ def render_comparison_image(
     if not 0 <= init_state_index < len(states):
         raise ValueError(f"Preview state {init_state_index} is unavailable.")
 
-    env, _ = get_libero_env(task, LIBERO_ENV_RESOLUTION, seed)
     pipeline = build_fault_pipeline(fault_config)
-    context = pipeline.context()
+    nominal_env, _ = get_libero_env(task, LIBERO_ENV_RESOLUTION, seed)
     try:
-        env.reset()
-        nominal_obs = env.set_init_state(states[init_state_index])
+        nominal_env.reset()
+        nominal_obs = nominal_env.set_init_state(states[init_state_index])
         nominal_images = get_libero_image(nominal_obs)
-        pipeline.on_reset(env, context)
-        faulted_raw = env.set_init_state(states[init_state_index])
-        faulted_obs = pipeline.transform_observation(faulted_raw, env, context)
+    finally:
+        nominal_env.close()
+
+    faulted_env, _ = get_libero_env(
+        task,
+        LIBERO_ENV_RESOLUTION,
+        seed,
+        fault_pipeline=pipeline,
+    )
+    try:
+        faulted_env.reset()
+        faulted_obs = faulted_env.set_init_state(states[init_state_index])
         faulted_images = get_libero_image(faulted_obs)
     finally:
-        pipeline.detach(env)
-        close_fn = getattr(env, "close", None)
-        if close_fn is not None:
-            close_fn()
+        faulted_env.close()
 
     label = json.dumps(pipeline.metadata()["faults"], ensure_ascii=True, separators=(",", ":"))
     if len(label) > 160:

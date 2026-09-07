@@ -26,7 +26,6 @@ if str(project_root) not in sys.path:
 
 from experiments.libero.libero_utils import (
     LIBERO_ENV_RESOLUTION,
-    capture_libero_observation,
     get_libero_dummy_action,
     get_libero_env,
     get_libero_image,
@@ -41,7 +40,7 @@ from fastwam.datasets.lerobot.utils.normalizer import load_dataset_stats_from_js
 from fastwam.utils.pytorch_utils import set_global_seed
 from fastwam.datasets.lerobot.robot_video_dataset import DEFAULT_PROMPT
 from libero.libero import benchmark, get_libero_path
-from resilient.faults import FaultPipeline, FaultTransition, build_fault_pipeline
+from resilient.faults import build_fault_pipeline
 from resilient.fault_detection import EpisodeLatentAccumulator
 from resilient.state_banks import assert_disjoint_manifests, load_manifest, load_task_states
 from experiments.libero.action_ensembler import ActionEnsembler
@@ -561,7 +560,6 @@ def run_single_episode(
     input_w: int,
     input_h: int,
     model_device: str,
-    fault_pipeline: FaultPipeline | None = None,
 ) -> tuple[
     bool,
     list,
@@ -585,17 +583,8 @@ def run_single_episode(
             pair_metrics=list(fault_detection_cfg.get("pair_metrics", ["lpe", "lcd", "rm"]))
         )
 
-    pipeline = fault_pipeline or FaultPipeline(pipeline_id="none", seed=0, faults=[])
-    episode_context = pipeline.context(episode_index=episode_idx, step_index=0)
     env.reset()
-    if pipeline.enabled:
-        pipeline.on_reset(env, episode_context)
-        raw_obs = env.set_init_state(initial_state)
-        obs = pipeline.transform_observation(raw_obs, env, episode_context)
-    else:
-        # Preserve the exact upstream reset path when fault injection is disabled.
-        obs = env.set_init_state(initial_state)
-        raw_obs = obs
+    obs = env.set_init_state(initial_state)
     if use_action_ensembler:
         ensembler = ActionEnsembler()
         ensembler.reset()
@@ -614,38 +603,9 @@ def run_single_episode(
     pbar = tqdm(total=max_steps + num_steps_wait, desc=f"Episode {episode_idx + 1}")
     while t < max_steps + num_steps_wait:
         pbar.update(1)
-        step_context = pipeline.context(episode_index=episode_idx, step_index=t)
         if t < num_steps_wait:
             policy_action = get_libero_dummy_action()
-            if pipeline.enabled:
-                executed_action = pipeline.transform_action(policy_action, env, step_context)
-                pipeline.before_step(env, executed_action, step_context)
-                next_raw_obs, reward, done, info = env.step(executed_action)
-                next_obs = pipeline.transform_observation(next_raw_obs, env, step_context)
-                transition = FaultTransition(
-                    raw_observation=raw_obs,
-                    student_observation=obs,
-                    policy_action=policy_action,
-                    executed_action=executed_action,
-                    next_raw_observation=next_raw_obs,
-                    next_student_observation=next_obs,
-                    reward=float(reward),
-                    done=bool(done),
-                    info={} if info is None else dict(info),
-                    fault_metadata=pipeline.metadata()["faults"],
-                )
-                pipeline.after_step(env, transition, step_context)
-                if pipeline.requires_post_step_observation_refresh:
-                    next_raw_obs = capture_libero_observation(env)
-                    next_obs = pipeline.transform_observation(next_raw_obs, env, step_context)
-                    transition.next_raw_observation = next_raw_obs
-                    transition.next_student_observation = next_obs
-                    done = bool(env.check_success())
-                    transition.done = done
-                raw_obs, obs = next_raw_obs, next_obs
-            else:
-                obs, _, done, _ = env.step(policy_action)
-                raw_obs = obs
+            obs, _, done, _ = env.step(policy_action)
             t += 1
             continue
 
@@ -695,35 +655,7 @@ def run_single_episode(
             replay_images.append(imgs.copy())
 
         policy_action = pending_actions.pop(0)
-        if pipeline.enabled:
-            executed_action = pipeline.transform_action(policy_action, env, step_context)
-            pipeline.before_step(env, executed_action, step_context)
-            next_raw_obs, reward, done, info = env.step(executed_action)
-            next_obs = pipeline.transform_observation(next_raw_obs, env, step_context)
-            transition = FaultTransition(
-                raw_observation=raw_obs,
-                student_observation=obs,
-                policy_action=policy_action,
-                executed_action=executed_action,
-                next_raw_observation=next_raw_obs,
-                next_student_observation=next_obs,
-                reward=float(reward),
-                done=bool(done),
-                info={} if info is None else dict(info),
-                fault_metadata=pipeline.metadata()["faults"],
-            )
-            pipeline.after_step(env, transition, step_context)
-            if pipeline.requires_post_step_observation_refresh:
-                next_raw_obs = capture_libero_observation(env)
-                next_obs = pipeline.transform_observation(next_raw_obs, env, step_context)
-                transition.next_raw_observation = next_raw_obs
-                transition.next_student_observation = next_obs
-                done = bool(env.check_success())
-                transition.done = done
-            raw_obs, obs = next_raw_obs, next_obs
-        else:
-            obs, _, done, _ = env.step(policy_action)
-            raw_obs = obs
+        obs, _, done, _ = env.step(policy_action)
         if (visualize_future_video and current_predicted_future_clip is not None) or (
             fault_detection and current_latent_clip is not None
         ):
@@ -857,7 +789,6 @@ def run_single_task(
     input_h: int,
     model_device: str,
 ) -> dict:
-    env, task_description = get_libero_env(task, LIBERO_ENV_RESOLUTION, cfg.get("seed"))
     visualize_future_video = bool(cfg.EVALUATION.get("visualize_future_video", False))
     fault_detection = bool(cfg.EVALUATION.get("fault_detection", {}).get("enabled", False))
     results = {
@@ -891,6 +822,12 @@ def run_single_task(
         )
     fault_pipeline = build_fault_pipeline(fault_config)
     results["fault"] = fault_pipeline.metadata()
+    env, task_description = get_libero_env(
+        task,
+        LIBERO_ENV_RESOLUTION,
+        cfg.get("seed"),
+        fault_pipeline=fault_pipeline,
+    )
 
     for trial_idx in range(int(cfg.EVALUATION.num_trials)):
         (
@@ -912,7 +849,6 @@ def run_single_task(
             input_w=input_w,
             input_h=input_h,
             model_device=model_device,
-            fault_pipeline=fault_pipeline,
         )
         if success:
             results["successes"] += 1
@@ -969,8 +905,6 @@ def run_single_task(
                 )
 
     results["fault"] = fault_pipeline.metadata()
-    fault_pipeline.detach(env)
-
     close_fn = getattr(env, "close", None)
     if close_fn is not None:
         close_fn()

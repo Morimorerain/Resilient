@@ -1,7 +1,9 @@
 # Fault configuration schema
 
 Faults are ordered, model-independent plugins. Evaluation and OPSD training consume the same
-pipeline document.
+pipeline document. An enabled pipeline is installed when the environment is created, and a
+transparent `FaultedEnvironment` owns all hooks so policy code uses only the standard environment
+API. Multiple faults compose in their YAML order.
 
 ```yaml
 pipeline:
@@ -24,9 +26,12 @@ retain the same family/operation while producing different manifests and output 
 fault keeps one severity record per component instead of inventing a dimensionless global score.
 
 Implement a new plugin by subclassing `resilient.faults.FaultRuntime` and registering its factory
-with `register_fault`. Use only the hooks needed by that fault:
+with `register_fault`. Use only the hooks needed by that fault; hooks are invoked by the
+environment, not the policy:
 
+- `attach` for simulator-startup installation;
 - `on_reset` for camera or simulator parameter mutations;
+- `on_state_loaded` for state-dependent refresh after loading an initial state;
 - `transform_observation` for contamination, occlusion, noise, or sensor dropout;
 - `transform_action` for actuator commands, limits, delay, or quantization;
 - `before_step`/`after_step` for robot structure and dynamics behavior;
@@ -42,7 +47,8 @@ a new public fault family or parameter is added.
 ## Joint-motion degradation
 
 `structure.joint_motion` reduces the displacement achieved by selected scalar robot joints during
-each LIBERO control step. The committed example is
+each environment dynamics step. It is installed with `FaultedEnvironment` when the simulator is
+constructed, independently of the controller or policy. The committed example is
 `configs/fault/structure/panda_joint1_half_motion.yaml`:
 
 ```yaml

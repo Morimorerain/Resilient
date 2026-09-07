@@ -50,6 +50,10 @@ class FaultPipeline:
         for fault in self.faults:
             fault.on_reset(env, context)
 
+    def on_state_loaded(self, env: Any, context: FaultContext) -> None:
+        for fault in self.faults:
+            fault.on_state_loaded(env, context)
+
     def transform_observation(self, observation: Any, env: Any, context: FaultContext) -> Any:
         transformed = copy.deepcopy(observation)
         for fault in self.faults:
@@ -107,6 +111,7 @@ class FaultPipeline:
             "pipeline_id": self.pipeline_id,
             "seed": self.seed,
             "enabled": self.enabled,
+            "activation": "environment_startup",
             "faults": [fault.metadata() for fault in self.faults],
         }
 

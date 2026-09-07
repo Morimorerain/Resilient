@@ -15,7 +15,7 @@ from ..types import FaultTransition, SeveritySpec
 
 
 class JointMotionLaw(Protocol):
-    """Transform nominal per-control-step joint displacement and velocity."""
+    """Transform nominal per-environment-step joint displacement and velocity."""
 
     name: str
 
@@ -118,7 +118,7 @@ def _as_joint_names(config: Mapping[str, Any]) -> tuple[str, ...]:
 
 
 class JointMotionFaultRuntime(FaultRuntime):
-    """Reduce selected joint motion after each simulator control step."""
+    """Reduce selected joint motion at the environment dynamics boundary."""
 
     family = "structure.joint_motion"
     scopes = frozenset({"structure", "dynamics", "joint"})
@@ -138,6 +138,7 @@ class JointMotionFaultRuntime(FaultRuntime):
         self.severity = severity
         self.operation = dict(operation)
         self.law = law
+        self._sim: Any | None = None
         self._qpos_indices: np.ndarray | None = None
         self._qvel_indices: np.ndarray | None = None
         self._before_qpos: np.ndarray | None = None
@@ -162,9 +163,7 @@ class JointMotionFaultRuntime(FaultRuntime):
             law=law,
         )
 
-    def attach(self, env: Any, context: FaultContext) -> None:
-        del context
-        sim = _get_sim(env)
+    def _resolve_joint_indices(self, sim: Any) -> None:
         qpos_indices = []
         qvel_indices = []
         for joint_name in self.joint_names:
@@ -185,9 +184,26 @@ class JointMotionFaultRuntime(FaultRuntime):
         self._qpos_indices = np.asarray(qpos_indices, dtype=np.int64)
         self._qvel_indices = np.asarray(qvel_indices, dtype=np.int64)
 
+    def _ensure_simulator(self, env: Any) -> None:
+        sim = _get_sim(env)
+        if self._sim is sim:
+            return
+        self._sim = sim
+        self._resolve_joint_indices(sim)
+
+    def attach(self, env: Any, context: FaultContext) -> None:
+        del context
+        self._ensure_simulator(env)
+
     def on_reset(self, env: Any, context: FaultContext) -> None:
-        if self._qpos_indices is None:
-            self.attach(env, context)
+        del context
+        self._ensure_simulator(env)
+        self._before_qpos = None
+        self._pending_context = None
+
+    def on_state_loaded(self, env: Any, context: FaultContext) -> None:
+        del context
+        self._ensure_simulator(env)
         self._before_qpos = None
         self._pending_context = None
 
@@ -195,14 +211,16 @@ class JointMotionFaultRuntime(FaultRuntime):
         del action
         if self._suspend_depth:
             return
-        if self._qpos_indices is None:
-            self.attach(env, context)
+        self._ensure_simulator(env)
         if self._pending_context is not None:
             raise RuntimeError(
                 "Joint-motion fault received a new step before completing the prior step."
             )
-        sim = _get_sim(env)
-        self._before_qpos = np.asarray(sim.data.qpos[self._qpos_indices], dtype=np.float64).copy()
+        if self._sim is None or self._qpos_indices is None:
+            raise RuntimeError("Joint-motion fault is not installed on a simulator.")
+        self._before_qpos = np.asarray(
+            self._sim.data.qpos[self._qpos_indices], dtype=np.float64
+        ).copy()
         self._pending_context = (context.episode_index, context.step_index)
 
     def after_step(
@@ -216,14 +234,18 @@ class JointMotionFaultRuntime(FaultRuntime):
         expected = (context.episode_index, context.step_index)
         if self._pending_context != expected or self._before_qpos is None:
             raise RuntimeError(
-                "Joint-motion fault post-step hook has no matching pre-step snapshot."
+                "Joint-motion fault post-step hook has no matching environment snapshot."
             )
-        if self._qpos_indices is None or self._qvel_indices is None:
-            raise RuntimeError("Joint-motion fault is not attached to the environment.")
+        self._ensure_simulator(env)
+        if self._sim is None or self._qpos_indices is None or self._qvel_indices is None:
+            raise RuntimeError("Joint-motion fault is not installed on a simulator.")
 
-        sim = _get_sim(env)
-        nominal_qpos = np.asarray(sim.data.qpos[self._qpos_indices], dtype=np.float64).copy()
-        nominal_qvel = np.asarray(sim.data.qvel[self._qvel_indices], dtype=np.float64).copy()
+        nominal_qpos = np.asarray(
+            self._sim.data.qpos[self._qpos_indices], dtype=np.float64
+        ).copy()
+        nominal_qvel = np.asarray(
+            self._sim.data.qvel[self._qvel_indices], dtype=np.float64
+        ).copy()
         nominal_displacement = nominal_qpos - self._before_qpos
         degraded_displacement, degraded_velocity = self.law.apply(
             nominal_displacement,
@@ -241,11 +263,9 @@ class JointMotionFaultRuntime(FaultRuntime):
         ):
             raise ValueError("Joint-motion law produced non-finite state values.")
 
-        degraded_qpos = self._before_qpos + degraded_displacement
-        sim.data.qpos[self._qpos_indices] = degraded_qpos
-        sim.data.qvel[self._qvel_indices] = degraded_velocity
-        sim.forward()
-
+        self._sim.data.qpos[self._qpos_indices] = self._before_qpos + degraded_displacement
+        self._sim.data.qvel[self._qvel_indices] = degraded_velocity
+        self._sim.forward()
         transition.info.setdefault("joint_motion_faults", []).append(
             {
                 "id": self.fault_id,
@@ -295,7 +315,8 @@ class JointMotionFaultRuntime(FaultRuntime):
             "targets": list(self.joint_names),
             "operation": self.law.metadata(),
             "severity": self.severity.to_dict(),
-            "semantics": "per_control_step_joint_displacement_retention",
+            "semantics": "per_environment_dynamics_step_joint_displacement_retention",
+            "injection_layer": "faulted_environment_dynamics",
         }
 
     def slug(self) -> str:
@@ -303,10 +324,11 @@ class JointMotionFaultRuntime(FaultRuntime):
             re.sub(r"[^A-Za-z0-9_-]+", "-", name).strip("-") for name in self.joint_names
         )
         ratio = f"{self.severity.value:.4f}".rstrip("0").rstrip(".").replace(".", "p")
-        return f"structure-joint_motion-{targets}-retention-p{ratio}"
+        return f"structure-joint_motion-{targets}-envstep-retention-p{ratio}"
 
     def detach(self, env: Any) -> None:
         del env
+        self._sim = None
         self._qpos_indices = None
         self._qvel_indices = None
         self._before_qpos = None

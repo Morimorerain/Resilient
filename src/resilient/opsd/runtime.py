@@ -34,7 +34,7 @@ from fastwam.datasets.lerobot.processors.fastwam_processor import FastWAMProcess
 from fastwam.datasets.lerobot.robot_video_dataset import DEFAULT_PROMPT
 from fastwam.datasets.lerobot.utils.normalizer import load_dataset_stats_from_json
 from fastwam.utils.pytorch_utils import set_global_seed
-from resilient.faults import FaultTransition, build_fault_pipeline
+from resilient.faults import build_fault_pipeline
 from resilient.faults.paired_observation import capture_paired_observation
 
 from .adapters import FastWAMLoraConfig, inject_fastwam_aligned_lora, load_adapter_state_dict
@@ -187,43 +187,18 @@ def validate_opsd_config(cfg: DictConfig, *, world_size: int | None = None) -> d
 def _execute_action_chunk(
     *,
     env: Any,
-    pipeline,
     raw_observation: Any,
     student_observation: Any,
     action_chunk,
-    episode_index: int,
-    start_step: int,
 ) -> tuple[Any, Any, bool, int]:
     raw_obs = raw_observation
     obs = student_observation
     done = False
     steps_taken = 0
-    for offset, policy_action in enumerate(action_chunk):
-        context = pipeline.context(episode_index, start_step + offset)
-        executed_action = pipeline.transform_action(policy_action, env, context)
-        pipeline.before_step(env, executed_action, context)
-        next_raw, reward, done, info = env.step(executed_action)
-        next_obs = pipeline.transform_observation(next_raw, env, context)
-        transition = FaultTransition(
-            raw_observation=raw_obs,
-            student_observation=obs,
-            policy_action=policy_action,
-            executed_action=executed_action,
-            next_raw_observation=next_raw,
-            next_student_observation=next_obs,
-            reward=float(reward),
-            done=bool(done),
-            info={} if info is None else dict(info),
-            fault_metadata=pipeline.metadata()["faults"],
-        )
-        pipeline.after_step(env, transition, context)
-        if pipeline.requires_post_step_observation_refresh:
-            next_raw = capture_libero_observation(env)
-            next_obs = pipeline.transform_observation(next_raw, env, context)
-            transition.next_raw_observation = next_raw
-            transition.next_student_observation = next_obs
-            done = bool(env.check_success())
-            transition.done = done
+    for policy_action in action_chunk:
+        next_obs, _, done, _ = env.step(policy_action)
+        transition = getattr(env, "last_transition", None)
+        next_raw = transition.next_raw_observation if transition is not None else next_obs
         raw_obs, obs = next_raw, next_obs
         steps_taken += 1
         if done:
@@ -374,28 +349,27 @@ def run_opsd_training(cfg: DictConfig) -> None:
                     f"{suite_name} task {task_id} has {len(initial_states)} initial states, "
                     f"but {rollouts_per_task} distinct states were requested."
                 )
-            env, task_description = get_libero_env(
-                task, LIBERO_ENV_RESOLUTION, descriptor.environment_seed
-            )
             fault_cfg = OmegaConf.to_container(cfg.fault, resolve=True)
             pipeline = build_fault_pipeline(fault_cfg)
             episode_index = schedule_epoch * global_rollouts_per_epoch + descriptor.sample_id
-            context = pipeline.context(episode_index, 0)
+            env, task_description = get_libero_env(
+                task,
+                LIBERO_ENV_RESOLUTION,
+                descriptor.environment_seed,
+                fault_pipeline=pipeline,
+                fault_episode_index=episode_index,
+            )
             try:
                 env.reset()
-                pipeline.on_reset(env, context)
-                raw_obs = env.set_init_state(initial_states[descriptor.initial_state_index])
-                obs = pipeline.transform_observation(raw_obs, env, context)
+                obs = env.set_init_state(initial_states[descriptor.initial_state_index])
+                raw_obs = getattr(env, "raw_observation", obs)
                 env_step = 0
                 for _ in range(int(cfg.opsd.rollout.num_steps_wait)):
                     raw_obs, obs, done, taken = _execute_action_chunk(
                         env=env,
-                        pipeline=pipeline,
                         raw_observation=raw_obs,
                         student_observation=obs,
                         action_chunk=[get_libero_dummy_action()],
-                        episode_index=episode_index,
-                        start_step=env_step,
                     )
                     env_step += taken
                     if done:
@@ -489,16 +463,12 @@ def run_opsd_training(cfg: DictConfig) -> None:
                     action[..., -1] = np.sign(action[..., -1])
                 raw_obs, obs, done, taken = _execute_action_chunk(
                     env=env,
-                    pipeline=pipeline,
                     raw_observation=raw_obs,
                     student_observation=obs,
                     action_chunk=action[: int(cfg.opsd.rollout.replan_steps)],
-                    episode_index=episode_index,
-                    start_step=env_step,
                 )
                 env_step += taken
             finally:
-                pipeline.detach(env)
                 close_fn = getattr(env, "close", None)
                 if close_fn is not None:
                     close_fn()

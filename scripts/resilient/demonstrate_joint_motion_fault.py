@@ -25,11 +25,8 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from libero.libero import benchmark, get_libero_path  # noqa: E402
 
-from experiments.libero.libero_utils import (  # noqa: E402
-    capture_libero_observation,
-    get_libero_env,
-)
-from resilient.faults import FaultTransition, build_fault_pipeline  # noqa: E402
+from experiments.libero.libero_utils import get_libero_env  # noqa: E402
+from resilient.faults import build_fault_pipeline  # noqa: E402
 from resilient.visualization import compose_comparison_frame  # noqa: E402
 
 DEFAULT_FAULT_CONFIG = Path("configs/fault/structure/panda_joint1_half_motion.yaml")
@@ -73,13 +70,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gripper", type=float, default=-1.0)
     parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
     return parser.parse_args()
-
-
-def _fresh_observation(env: Any) -> dict[str, Any]:
-    observation = capture_libero_observation(env)
-    if not isinstance(observation, dict):
-        raise TypeError("LIBERO demonstration expects a dictionary observation.")
-    return observation
 
 
 def _capture_record(
@@ -140,19 +130,19 @@ def _run_trajectory(
     args: argparse.Namespace,
     fault_config: dict[str, Any] | None,
 ) -> tuple[list[FrameRecord], dict[str, Any]]:
-    env, task_description = get_libero_env(task, args.resolution, args.environment_seed)
     pipeline = build_fault_pipeline(fault_config)
+    env, task_description = get_libero_env(
+        task,
+        args.resolution,
+        args.environment_seed,
+        fault_pipeline=pipeline,
+    )
     records: list[FrameRecord] = []
     try:
         env.reset()
         observation = env.set_init_state(initial_state)
         if not isinstance(observation, dict):
             raise TypeError("LIBERO demonstration expects a dictionary observation.")
-        if pipeline.enabled:
-            pipeline.on_reset(env, pipeline.context(episode_index=0, step_index=0))
-            observation = pipeline.transform_observation(
-                observation, env, pipeline.context(episode_index=0, step_index=0)
-            )
         records.append(
             _capture_record(
                 env,
@@ -162,29 +152,8 @@ def _run_trajectory(
             )
         )
 
-        for step_index, policy_action in enumerate(actions):
-            context = pipeline.context(episode_index=0, step_index=step_index)
-            executed_action = pipeline.transform_action(policy_action, env, context)
-            pipeline.before_step(env, executed_action, context)
-            next_raw, reward, done, info = env.step(executed_action)
-            next_observation = pipeline.transform_observation(next_raw, env, context)
-            transition = FaultTransition(
-                raw_observation=observation,
-                student_observation=observation,
-                policy_action=policy_action,
-                executed_action=executed_action,
-                next_raw_observation=next_raw,
-                next_student_observation=next_observation,
-                reward=float(reward),
-                done=bool(done),
-                info={} if info is None else dict(info),
-                fault_metadata=pipeline.metadata()["faults"],
-            )
-            pipeline.after_step(env, transition, context)
-            if pipeline.requires_post_step_observation_refresh:
-                next_raw = _fresh_observation(env)
-                next_observation = pipeline.transform_observation(next_raw, env, context)
-            observation = next_observation
+        for policy_action in actions:
+            observation, _, _, _ = env.step(policy_action)
             records.append(
                 _capture_record(
                     env,
@@ -205,7 +174,6 @@ def _run_trajectory(
         }
         return records, metadata
     finally:
-        pipeline.detach(env)
         env.close()
 
 
@@ -282,10 +250,11 @@ def main() -> None:
             frame = compose_comparison_frame(
                 clean.image,
                 fault.image,
-                title="LIBERO OSC_POSE: joint-motion degradation",
+                title="LIBERO OSC_POSE: simulator-level joint degradation",
                 clean_label="CLEAN | same command sequence",
                 fault_label=(
-                    f"FAULT | {target_joint} | motion retained: {retention_ratio:.0%}"
+                    f"SIM FAULT | {target_joint} | per-step motion retained: "
+                    f"{retention_ratio:.0%}"
                 ),
                 clean_telemetry={
                     f"{target_joint} delta (deg)": float(clean_q_delta),

@@ -26,10 +26,13 @@ class FaultRuntime(ABC):
     requires_post_step_observation_refresh: bool = False
 
     def attach(self, env: Any, context: FaultContext) -> None:
-        """Attach to an environment without changing baseline state."""
+        """Install the fault when its simulator environment is created."""
 
     def on_reset(self, env: Any, context: FaultContext) -> None:
         """Apply reset-sensitive environment mutations."""
+
+    def on_state_loaded(self, env: Any, context: FaultContext) -> None:
+        """Refresh state-sensitive internals after a simulator state load."""
 
     def transform_observation(
         self,

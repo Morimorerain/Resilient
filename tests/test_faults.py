@@ -10,9 +10,13 @@ from types import ModuleType
 
 import numpy as np
 
-from resilient.faults import FaultPipeline, FaultRuntime, build_fault_pipeline
+from resilient.faults import (
+    FaultPipeline,
+    FaultRuntime,
+    build_fault_pipeline,
+    install_fault_pipeline,
+)
 from resilient.faults.structure import available_joint_motion_laws
-from resilient.faults.types import FaultTransition
 from resilient.faults.visual.camera_pose import (
     local_xyz_offset_quaternion,
     rotate_vector,
@@ -82,6 +86,12 @@ class _FakeJointSimulation:
         self.model = _FakeJointModel()
         self.data = _FakeJointData()
         self.forward_calls = 0
+        self.step_displacement = np.asarray([0.8, 0.4, -0.2], dtype=np.float64)
+        self.step_velocity = np.asarray([1.2, 0.7, -0.6], dtype=np.float64)
+
+    def step(self) -> None:
+        self.data.qpos += self.step_displacement
+        self.data.qvel[:] = self.step_velocity
 
     def forward(self) -> None:
         self.forward_calls += 1
@@ -90,6 +100,31 @@ class _FakeJointSimulation:
 class _FakeJointEnvironment:
     def __init__(self) -> None:
         self.sim = _FakeJointSimulation()
+
+    def reset(self) -> dict:
+        self.sim.data.qpos[:] = 0.0
+        self.sim.data.qvel[:] = 0.0
+        return self._get_observations()
+
+    def set_init_state(self, state) -> dict:
+        self.sim.data.qpos[:] = state
+        self.sim.data.qvel[:] = 0.0
+        return self._get_observations()
+
+    def step(self, action):
+        del action
+        self.sim.step()
+        return self._get_observations(), 0.0, False, {}
+
+    def _get_observations(self, force_update: bool = False) -> dict:
+        del force_update
+        return {"qpos": self.sim.data.qpos.copy()}
+
+    def check_success(self) -> bool:
+        return False
+
+    def close(self) -> None:
+        pass
 
 
 def _camera_config(severity: float = 30.0) -> dict:
@@ -217,41 +252,68 @@ class FaultPipelineTests(unittest.TestCase):
         self.assertFalse(pipeline.enabled)
         self.assertEqual(pipeline.transform_action([1], object(), pipeline.context()), [1])
 
-    def test_joint_motion_fault_scales_selected_joint_state_delta(self) -> None:
-        env = _FakeJointEnvironment()
+    def test_joint_motion_fault_scales_selected_joint_at_environment_step(self) -> None:
+        raw_env = _FakeJointEnvironment()
         pipeline = build_fault_pipeline(_joint_motion_config())
-        context = pipeline.context(episode_index=3, step_index=7)
-        pipeline.on_reset(env, context)
-        pipeline.before_step(env, np.zeros(7), context)
-        env.sim.data.qpos[:] = [0.8, 0.4, -0.2]
-        env.sim.data.qvel[:] = [1.2, 0.7, -0.6]
-        transition = FaultTransition({}, {}, info={})
-        pipeline.after_step(env, transition, context)
+        env = install_fault_pipeline(raw_env, pipeline, initial_episode_index=3)
+        env.reset()
+        env.step(np.zeros(7, dtype=np.float64))
 
         self.assertTrue(pipeline.requires_post_step_observation_refresh)
         np.testing.assert_allclose(env.sim.data.qpos, [0.4, 0.4, -0.2])
         np.testing.assert_allclose(env.sim.data.qvel, [0.6, 0.7, -0.6])
         self.assertEqual(env.sim.forward_calls, 1)
-        applied = transition.info["joint_motion_faults"][0]
-        self.assertEqual(applied["joints"], ["robot0_joint1"])
-        self.assertAlmostEqual(applied["nominal_displacement_rad"][0], 0.8)
-        self.assertAlmostEqual(applied["applied_displacement_rad"][0], 0.4)
+        self.assertEqual(
+            pipeline.metadata()["faults"][0]["injection_layer"],
+            "faulted_environment_dynamics",
+        )
+        env.close()
 
     def test_joint_motion_fault_supports_multiple_targets(self) -> None:
-        env = _FakeJointEnvironment()
+        raw_env = _FakeJointEnvironment()
         pipeline = build_fault_pipeline(
             _joint_motion_config(["robot0_joint1", "robot0_joint3"], retention=0.25)
         )
-        context = pipeline.context()
-        pipeline.on_reset(env, context)
-        pipeline.before_step(env, np.zeros(7), context)
-        env.sim.data.qpos[:] = [0.8, 0.4, -0.4]
-        env.sim.data.qvel[:] = [1.2, 0.7, -0.8]
-        pipeline.after_step(env, FaultTransition({}, {}, info={}), context)
+        env = install_fault_pipeline(raw_env, pipeline)
+        env.reset()
+        env.sim.step_displacement[:] = [0.8, 0.4, -0.4]
+        env.sim.step_velocity[:] = [1.2, 0.7, -0.8]
+        env.step(np.zeros(7, dtype=np.float64))
 
         np.testing.assert_allclose(env.sim.data.qpos, [0.2, 0.4, -0.1])
         np.testing.assert_allclose(env.sim.data.qvel, [0.3, 0.7, -0.2])
         self.assertEqual(available_joint_motion_laws(), ("proportional",))
+        env.close()
+
+    def test_faulted_environment_owns_joint_fault_lifecycle(self) -> None:
+        raw_env = _FakeJointEnvironment()
+        pipeline = build_fault_pipeline(_joint_motion_config())
+        env = install_fault_pipeline(raw_env, pipeline)
+
+        env.reset()
+        initial_observation = env.set_init_state(np.zeros(3, dtype=np.float64))
+        observation, _, _, _ = env.step(np.zeros(7, dtype=np.float64))
+
+        np.testing.assert_allclose(initial_observation["qpos"], [0.0, 0.0, 0.0])
+        np.testing.assert_allclose(observation["qpos"], [0.4, 0.4, -0.2])
+        self.assertEqual(env.fault_metadata["activation"], "environment_startup")
+        env.close()
+
+    def test_simulator_level_faults_compose_in_one_environment(self) -> None:
+        config = _joint_motion_config(["robot0_joint1"], retention=0.5)
+        second = _joint_motion_config(["robot0_joint3"], retention=0.5)["pipeline"][
+            "faults"
+        ][0]
+        second["id"] = "joint3_motion"
+        config["pipeline"]["faults"].append(second)
+        raw_env = _FakeJointEnvironment()
+        env = install_fault_pipeline(raw_env, build_fault_pipeline(config))
+
+        env.reset()
+        observation, _, _, _ = env.step(np.zeros(7, dtype=np.float64))
+
+        np.testing.assert_allclose(observation["qpos"], [0.4, 0.4, -0.1])
+        env.close()
 
     def test_joint_motion_fault_rejects_invalid_retention(self) -> None:
         with self.assertRaisesRegex(ValueError, "retention ratio"):

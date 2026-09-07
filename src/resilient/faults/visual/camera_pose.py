@@ -213,6 +213,11 @@ class CameraPoseFaultRuntime(FaultRuntime):
         sim.forward()
         self._active = False
 
+    def attach(self, env: Any, context: FaultContext) -> None:
+        """Activate the camera fault as soon as the environment is installed."""
+        del context
+        self._apply(env)
+
     def on_reset(self, env: Any, context: FaultContext) -> None:
         del context
         self._apply(env)

@@ -205,11 +205,14 @@ NUM_GPUS=8 bash reproduce/fastwam_libero/evaluate_full.sh
 
 ## 可复用 Fault 管线与评测
 
-Fault 定义是 `configs/fault/` 下与模型解耦的 YAML。`FaultPipeline` 按声明顺序提供 reset、
-observation、action、step 前后、临时挂起、断点状态和 detach 接口。后续图像污渍/遮挡、执行器
-限制、关节运动退化和动力学故障可通过插件加入，不需要继续在 Fast-WAM 中增加故障分支。每个
-Fault 都有稳定的 `family` 和独立的物理 `severity`（名称、数值、单位及可选等级），因此绕轴
-10/20/30 度属于同一 Fault family 的三个 severity。
+Fault 定义是 `configs/fault/` 下与模型解耦的 YAML。创建环境时，
+`get_libero_env(..., fault_pipeline=pipeline)` 会将启用的 pipeline 安装到透明的
+`FaultedEnvironment`。之后 reset、状态加载、observation、action、simulator step、临时
+挂起、断点状态及 detach 均由环境拥有；策略只调用标准 `reset`、`set_init_state`
+和 `step`，不包含 Fault hook。后续图像污渍/遮挡、执行器限制、关节运动退化、动力学
+故障及多 Fault 顺序组合均可以插件形式加入，不需要在 Fast-WAM 或其他策略中增加故障
+分支。每个 Fault 都有稳定的 `family` 和独立的物理 `severity`（名称、数值、单位及可选
+等级），因此绕轴 10/20/30 度属于同一 Fault family 的三个 severity。
 
 已提交的相机示例为 `configs/fault/visual/wrist_camera_local_z.yaml`。用 4 卡评测默认的手腕相机
 绕局部 +Z 轴 30 度：
@@ -249,11 +252,11 @@ python scripts/resilient/evaluate_fault.py \
 
 ### 关节运动退化 Fault 演示
 
-`structure.joint_motion` family 在每个 LIBERO 控制步结束后对指定关节应用可配置的
-运动保留律，`targets` 可同时指定一个或多个 MuJoCo 关节名。首个内置实现为
-`proportional`；已提供的配置在每个 20 Hz 控制步中仅保留 `robot0_joint1` 50% 的
-角位移和关节速度。退化律有独立注册表，后续可增加确定性非线性函数，无需修改
-仿真调用器或模型代码。
+`structure.joint_motion` family 在 MuJoCo simulator 创建时由环境安装，它作用在底层环境
+动力学 step 边界，与 `OSC_POSE`、Fast-WAM、OPSD 或后续任何控制器无关。`targets` 可同时指定
+一个或多个 MuJoCo 关节名。首个内置实现为 `proportional`；已提供的配置会将每个
+环境控制步产生的 `robot0_joint1` 角位移和关节速度仅保留 50%。退化律有独立
+注册表，后续可增加确定性非线性函数，无需修改仿真调用器或模型代码。
 
 生成时间对齐的 clean/fault `OSC_POSE` 对比视频：
 
@@ -273,16 +276,16 @@ python scripts/resilient/demonstrate_joint_motion_fault.py \
 `summary.json`。可通过 `--render-camera`、`--osc-command`、各阶段步数、seed、分辨率、
 FPS 及 `--output-root` 调整演示。
 
-线性退化定义在每个控制步上：
+线性退化定义在每个环境动力学 step 边界：
 
 ```text
 q_fault_after = q_before + retention * (q_nominal_after - q_before)
 ```
 
 同时将目标关节速度乘以 `retention`。这是有意设计的运动学位移损失，不是执行器力矩
-效率损失。由于 `OSC_POSE` 仍为闭环且可在后续控制步补偿，Fault 轨迹的最终关节角不应
-被预期为 clean 最终角度的严格 50%。未选择该 Fault family 时，原始无 Fault 和相机 Fault
-路径不受影响。
+效率损失。该安装会跨环境 reset 保持，只在环境 close 时拆除；配置中的多个 simulator Fault
+按 YAML 顺序组合。由于闭环控制器会在后续控制步持续补偿，Fault 轨迹的最终关节角不应
+被预期为 clean 最终角度的严格 50%。未安装 pipeline 时，原始无 Fault 路径不受影响。
 
 已有 checkpoint 无需重新训练即可进行未见状态验证。先通过带 seed 的 LIBERO reset 生成独立
 验证状态库；该命令也会从已完成 OPSD run 的 metrics 重建训练实际见过的官方状态及环境 seed：
