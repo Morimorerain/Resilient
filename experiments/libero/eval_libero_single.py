@@ -791,11 +791,28 @@ def run_single_task(
 ) -> dict:
     visualize_future_video = bool(cfg.EVALUATION.get("visualize_future_video", False))
     fault_detection = bool(cfg.EVALUATION.get("fault_detection", {}).get("enabled", False))
+
+    fault_config_path = cfg.EVALUATION.get("fault_config_path")
+    if fault_config_path is None:
+        fault_config = OmegaConf.to_container(cfg.EVALUATION.get("fault"), resolve=True)
+    else:
+        fault_config = OmegaConf.to_container(
+            OmegaConf.load(Path(str(fault_config_path)).expanduser()), resolve=True
+        )
+    fault_pipeline = build_fault_pipeline(fault_config)
+    env, task_description = get_libero_env(
+        task,
+        LIBERO_ENV_RESOLUTION,
+        cfg.get("seed"),
+        fault_pipeline=fault_pipeline,
+    )
+
     results = {
         "successes": 0,
         "failure_episodes": [],
         "success_episodes": [],
         "task_description": task_description,
+        "fault": fault_pipeline.metadata(),
     }
     if visualize_future_video:
         results["episode_future_video_psnr"] = []
@@ -812,22 +829,6 @@ def run_single_task(
                 cfg.EVALUATION.fault_detection.get("exclude_conditioning_latent", True)
             ),
         }
-
-    fault_config_path = cfg.EVALUATION.get("fault_config_path")
-    if fault_config_path is None:
-        fault_config = OmegaConf.to_container(cfg.EVALUATION.get("fault"), resolve=True)
-    else:
-        fault_config = OmegaConf.to_container(
-            OmegaConf.load(Path(str(fault_config_path)).expanduser()), resolve=True
-        )
-    fault_pipeline = build_fault_pipeline(fault_config)
-    results["fault"] = fault_pipeline.metadata()
-    env, task_description = get_libero_env(
-        task,
-        LIBERO_ENV_RESOLUTION,
-        cfg.get("seed"),
-        fault_pipeline=fault_pipeline,
-    )
 
     for trial_idx in range(int(cfg.EVALUATION.num_trials)):
         (
