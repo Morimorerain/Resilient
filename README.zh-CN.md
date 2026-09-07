@@ -247,6 +247,43 @@ python scripts/resilient/evaluate_fault.py \
 标识，manifest 同时记录基座模型、adapter 和配置；不传这两个参数时仍走原 Fast-WAM 基线加载
 路径。
 
+### 关节运动退化 Fault 演示
+
+`structure.joint_motion` family 在每个 LIBERO 控制步结束后对指定关节应用可配置的
+运动保留律，`targets` 可同时指定一个或多个 MuJoCo 关节名。首个内置实现为
+`proportional`；已提供的配置在每个 20 Hz 控制步中仅保留 `robot0_joint1` 50% 的
+角位移和关节速度。退化律有独立注册表，后续可增加确定性非线性函数，无需修改
+仿真调用器或模型代码。
+
+生成时间对齐的 clean/fault `OSC_POSE` 对比视频：
+
+```bash
+MUJOCO_GL=egl PYOPENGL_PLATFORM=egl PYTHONPATH=src:third_party/LIBERO:. \
+python scripts/resilient/demonstrate_joint_motion_fault.py \
+  --fault-config configs/fault/structure/panda_joint1_half_motion.yaml \
+  --suite libero_spatial \
+  --task-id 0 \
+  --initial-state-index 0
+```
+
+两个画面从同一 simulator state 出发，回放完全相同的归一化 `OSC_POSE` 命令序列。
+默认轨迹故意沿 `-x/+y/+z` 较远距离运动，以明显调动 Panda 第一关节。每帧标注同步
+时间、目标关节相对角度、末端位置及 clean/fault 末端距离。默认输出到被 Git 忽略的
+`evaluate_results/fault_demos/<fault-slug>/<suite_task_state>/`，包含 `clean_vs_fault.mp4` 和
+`summary.json`。可通过 `--render-camera`、`--osc-command`、各阶段步数、seed、分辨率、
+FPS 及 `--output-root` 调整演示。
+
+线性退化定义在每个控制步上：
+
+```text
+q_fault_after = q_before + retention * (q_nominal_after - q_before)
+```
+
+同时将目标关节速度乘以 `retention`。这是有意设计的运动学位移损失，不是执行器力矩
+效率损失。由于 `OSC_POSE` 仍为闭环且可在后续控制步补偿，Fault 轨迹的最终关节角不应
+被预期为 clean 最终角度的严格 50%。未选择该 Fault family 时，原始无 Fault 和相机 Fault
+路径不受影响。
+
 已有 checkpoint 无需重新训练即可进行未见状态验证。先通过带 seed 的 LIBERO reset 生成独立
 验证状态库；该命令也会从已完成 OPSD run 的 metrics 重建训练实际见过的官方状态及环境 seed：
 

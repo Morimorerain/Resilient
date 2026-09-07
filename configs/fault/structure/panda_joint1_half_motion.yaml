@@ -1,0 +1,16 @@
+pipeline:
+  id: panda_joint1_half_motion
+  enabled: true
+  seed: 42
+  faults:
+    - id: panda_joint1_motion_retention
+      family: structure.joint_motion
+      enabled: true
+      targets: [robot0_joint1]
+      operation:
+        type: proportional
+      severity:
+        name: motion_retention
+        value: 0.5
+        unit: ratio
+        level: moderate

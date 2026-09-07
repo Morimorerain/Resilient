@@ -27,10 +27,13 @@ def registered_faults() -> tuple[str, ...]:
 
 
 def _register_builtins() -> None:
+    from .structure.joint_motion import JointMotionFaultRuntime
     from .visual.camera_pose import CameraPoseFaultRuntime
 
     if CameraPoseFaultRuntime.family not in _REGISTRY:
         register_fault(CameraPoseFaultRuntime.family, CameraPoseFaultRuntime.from_config)
+    if JointMotionFaultRuntime.family not in _REGISTRY:
+        register_fault(JointMotionFaultRuntime.family, JointMotionFaultRuntime.from_config)
 
 
 def build_fault(config: Mapping[str, Any]) -> FaultRuntime:

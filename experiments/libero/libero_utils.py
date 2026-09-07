@@ -38,6 +38,24 @@ def get_libero_env(task, resolution, seed, env_num=1):
     )  # IMPORTANT: seed seems to affect object positions even when using fixed initial state
     return env, task_description
 
+
+def capture_libero_observation(env):
+    """Capture a fresh observation after a post-step fault mutates simulator state."""
+    current = env
+    visited = set()
+    while id(current) not in visited:
+        visited.add(id(current))
+        method = getattr(current, "_get_observations", None)
+        if callable(method):
+            try:
+                return method(force_update=True)
+            except TypeError:
+                return method()
+        current = getattr(current, "env", None)
+        if current is None:
+            break
+    raise AttributeError("LIBERO environment does not expose _get_observations().")
+
 def get_libero_dummy_action():
     """Get dummy/no-op action, used to roll out the simulation while the robot does nothing."""
     return [0, 0, 0, 0, 0, 0, -1]

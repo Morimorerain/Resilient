@@ -38,3 +38,23 @@ Factories must validate target names, units, ranges, and operation-specific seve
 Random plugins must derive randomness from the supplied seed, episode index, and step index and
 must store any additional mutable state. Add tests and synchronize both root README files whenever
 a new public fault family or parameter is added.
+
+## Joint-motion degradation
+
+`structure.joint_motion` reduces the displacement achieved by selected scalar robot joints during
+each LIBERO control step. The committed example is
+`configs/fault/structure/panda_joint1_half_motion.yaml`:
+
+```yaml
+family: structure.joint_motion
+targets: [robot0_joint1]
+operation: {type: proportional}
+severity: {name: motion_retention, value: 0.5, unit: ratio}
+```
+
+`targets` accepts one or more MuJoCo joint names. A proportional retention of `0.5` applies
+`q_after = q_before + 0.5 * (q_nominal_after - q_before)` and scales the selected joint velocity by
+the same factor. This is a deterministic kinematic motion-retention fault, not an actuator-torque
+efficiency model. Closed-loop OSC may command compensating motion on later steps, so total motion
+over a trajectory need not be exactly half of the clean total. New deterministic non-linear laws
+can be added through `register_joint_motion_law` without changing the fault pipeline or consumers.

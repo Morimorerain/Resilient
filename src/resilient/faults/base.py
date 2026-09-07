@@ -23,6 +23,7 @@ class FaultRuntime(ABC):
     family: str
     fault_id: str
     scopes: frozenset[str] = frozenset()
+    requires_post_step_observation_refresh: bool = False
 
     def attach(self, env: Any, context: FaultContext) -> None:
         """Attach to an environment without changing baseline state."""

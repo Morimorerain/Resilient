@@ -8,11 +8,16 @@ import unittest
 from pathlib import Path
 from types import ModuleType
 
+import numpy as np
+
 from resilient.faults import FaultPipeline, FaultRuntime, build_fault_pipeline
+from resilient.faults.structure import available_joint_motion_laws
+from resilient.faults.types import FaultTransition
 from resilient.faults.visual.camera_pose import (
     local_xyz_offset_quaternion,
     rotate_vector,
 )
+from resilient.visualization import compose_comparison_frame
 
 
 def _load_evaluation_script() -> ModuleType:
@@ -56,6 +61,37 @@ class _FakeEnvironment:
         self.sim = _FakeSimulation()
 
 
+class _FakeJointModel:
+    _indices = {"robot0_joint1": 0, "robot0_joint3": 2}
+
+    def get_joint_qpos_addr(self, name: str) -> int:
+        return self._indices[name]
+
+    def get_joint_qvel_addr(self, name: str) -> int:
+        return self._indices[name]
+
+
+class _FakeJointData:
+    def __init__(self) -> None:
+        self.qpos = np.zeros(3, dtype=np.float64)
+        self.qvel = np.zeros(3, dtype=np.float64)
+
+
+class _FakeJointSimulation:
+    def __init__(self) -> None:
+        self.model = _FakeJointModel()
+        self.data = _FakeJointData()
+        self.forward_calls = 0
+
+    def forward(self) -> None:
+        self.forward_calls += 1
+
+
+class _FakeJointEnvironment:
+    def __init__(self) -> None:
+        self.sim = _FakeJointSimulation()
+
+
 def _camera_config(severity: float = 30.0) -> dict:
     return {
         "pipeline": {
@@ -77,6 +113,28 @@ def _camera_config(severity: float = 30.0) -> dict:
                         "unit": "degree",
                     },
                     "parameters": {"position_offset": [0.1, -0.2, 0.3]},
+                }
+            ],
+        }
+    }
+
+
+def _joint_motion_config(targets=None, retention: float = 0.5) -> dict:
+    return {
+        "pipeline": {
+            "id": "joint_motion_test",
+            "seed": 11,
+            "faults": [
+                {
+                    "id": "joint_motion",
+                    "family": "structure.joint_motion",
+                    "targets": targets or ["robot0_joint1"],
+                    "operation": {"type": "proportional"},
+                    "severity": {
+                        "name": "motion_retention",
+                        "value": retention,
+                        "unit": "ratio",
+                    },
                 }
             ],
         }
@@ -158,6 +216,63 @@ class FaultPipelineTests(unittest.TestCase):
         pipeline = build_fault_pipeline({"pipeline": {"enabled": False}})
         self.assertFalse(pipeline.enabled)
         self.assertEqual(pipeline.transform_action([1], object(), pipeline.context()), [1])
+
+    def test_joint_motion_fault_scales_selected_joint_state_delta(self) -> None:
+        env = _FakeJointEnvironment()
+        pipeline = build_fault_pipeline(_joint_motion_config())
+        context = pipeline.context(episode_index=3, step_index=7)
+        pipeline.on_reset(env, context)
+        pipeline.before_step(env, np.zeros(7), context)
+        env.sim.data.qpos[:] = [0.8, 0.4, -0.2]
+        env.sim.data.qvel[:] = [1.2, 0.7, -0.6]
+        transition = FaultTransition({}, {}, info={})
+        pipeline.after_step(env, transition, context)
+
+        self.assertTrue(pipeline.requires_post_step_observation_refresh)
+        np.testing.assert_allclose(env.sim.data.qpos, [0.4, 0.4, -0.2])
+        np.testing.assert_allclose(env.sim.data.qvel, [0.6, 0.7, -0.6])
+        self.assertEqual(env.sim.forward_calls, 1)
+        applied = transition.info["joint_motion_faults"][0]
+        self.assertEqual(applied["joints"], ["robot0_joint1"])
+        self.assertAlmostEqual(applied["nominal_displacement_rad"][0], 0.8)
+        self.assertAlmostEqual(applied["applied_displacement_rad"][0], 0.4)
+
+    def test_joint_motion_fault_supports_multiple_targets(self) -> None:
+        env = _FakeJointEnvironment()
+        pipeline = build_fault_pipeline(
+            _joint_motion_config(["robot0_joint1", "robot0_joint3"], retention=0.25)
+        )
+        context = pipeline.context()
+        pipeline.on_reset(env, context)
+        pipeline.before_step(env, np.zeros(7), context)
+        env.sim.data.qpos[:] = [0.8, 0.4, -0.4]
+        env.sim.data.qvel[:] = [1.2, 0.7, -0.8]
+        pipeline.after_step(env, FaultTransition({}, {}, info={}), context)
+
+        np.testing.assert_allclose(env.sim.data.qpos, [0.2, 0.4, -0.1])
+        np.testing.assert_allclose(env.sim.data.qvel, [0.3, 0.7, -0.2])
+        self.assertEqual(available_joint_motion_laws(), ("proportional",))
+
+    def test_joint_motion_fault_rejects_invalid_retention(self) -> None:
+        with self.assertRaisesRegex(ValueError, "retention ratio"):
+            build_fault_pipeline(_joint_motion_config(retention=1.5))
+
+    def test_fault_comparison_frame_preserves_aligned_panel_geometry(self) -> None:
+        clean = np.zeros((8, 12, 3), dtype=np.uint8)
+        fault = np.full((8, 12, 3), 255, dtype=np.uint8)
+        frame = compose_comparison_frame(
+            clean,
+            fault,
+            title="test",
+            clean_label="clean",
+            fault_label="fault",
+            clean_telemetry={"q": 0.0},
+            fault_telemetry={"q": 1.0},
+            timestamp_seconds=0.0,
+            panel_scale=2,
+        )
+        self.assertEqual(frame.shape, (92, 48, 3))
+        self.assertEqual(frame.dtype, np.uint8)
 
 
 class FaultEvaluationScriptTests(unittest.TestCase):

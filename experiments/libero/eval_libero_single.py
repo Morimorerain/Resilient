@@ -26,6 +26,7 @@ if str(project_root) not in sys.path:
 
 from experiments.libero.libero_utils import (
     LIBERO_ENV_RESOLUTION,
+    capture_libero_observation,
     get_libero_dummy_action,
     get_libero_env,
     get_libero_image,
@@ -634,6 +635,13 @@ def run_single_episode(
                     fault_metadata=pipeline.metadata()["faults"],
                 )
                 pipeline.after_step(env, transition, step_context)
+                if pipeline.requires_post_step_observation_refresh:
+                    next_raw_obs = capture_libero_observation(env)
+                    next_obs = pipeline.transform_observation(next_raw_obs, env, step_context)
+                    transition.next_raw_observation = next_raw_obs
+                    transition.next_student_observation = next_obs
+                    done = bool(env.check_success())
+                    transition.done = done
                 raw_obs, obs = next_raw_obs, next_obs
             else:
                 obs, _, done, _ = env.step(policy_action)
@@ -705,6 +713,13 @@ def run_single_episode(
                 fault_metadata=pipeline.metadata()["faults"],
             )
             pipeline.after_step(env, transition, step_context)
+            if pipeline.requires_post_step_observation_refresh:
+                next_raw_obs = capture_libero_observation(env)
+                next_obs = pipeline.transform_observation(next_raw_obs, env, step_context)
+                transition.next_raw_observation = next_raw_obs
+                transition.next_student_observation = next_obs
+                done = bool(env.check_success())
+                transition.done = done
             raw_obs, obs = next_raw_obs, next_obs
         else:
             obs, _, done, _ = env.step(policy_action)

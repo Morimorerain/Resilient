@@ -251,6 +251,45 @@ python scripts/resilient/evaluate_fault.py \
 the adapter checkpoint identifier, and the manifest records the base model, adapter, and config.
 Without these arguments, evaluation follows the unchanged Fast-WAM checkpoint path.
 
+### Joint-motion fault demonstration
+
+The `structure.joint_motion` family applies a configurable motion-retention law after each LIBERO
+control step. It accepts one or more MuJoCo joint names. The first built-in law is `proportional`;
+the example retains 50% of `robot0_joint1` displacement and velocity on every 20 Hz control step.
+The degradation law has its own registry, so future deterministic non-linear functions do not
+require changes to the simulator runner or model code.
+
+Generate a time-aligned clean/fault `OSC_POSE` comparison with:
+
+```bash
+MUJOCO_GL=egl PYOPENGL_PLATFORM=egl PYTHONPATH=src:third_party/LIBERO:. \
+python scripts/resilient/demonstrate_joint_motion_fault.py \
+  --fault-config configs/fault/structure/panda_joint1_half_motion.yaml \
+  --suite libero_spatial \
+  --task-id 0 \
+  --initial-state-index 0
+```
+
+Both panels replay the same normalized `OSC_POSE` command sequence from the same simulator state.
+The default trajectory deliberately moves far in `-x/+y/+z` to exercise Panda joint 1. Each frame
+shows synchronized time, target-joint displacement, end-effector position, and clean/fault
+end-effector separation. The default ignored output is
+`evaluate_results/fault_demos/<fault-slug>/<suite_task_state>/`, containing
+`clean_vs_fault.mp4` and `summary.json`. Use `--render-camera`, `--osc-command`, phase-length, seed,
+resolution, FPS, and `--output-root` arguments to reproduce or change the visualization.
+
+The proportional law is defined per control step:
+
+```text
+q_fault_after = q_before + retention * (q_nominal_after - q_before)
+```
+
+It also scales the selected joint velocity by `retention`. This intentionally models kinematic
+motion loss rather than actuator torque loss. Because `OSC_POSE` remains closed loop and can
+compensate on later steps, the final faulty joint displacement is not expected to equal exactly
+`retention * clean_final_displacement`. The original no-fault and camera-fault paths remain
+unchanged unless this fault family is selected.
+
 For an unseen-state evaluation of an existing checkpoint, first generate a validation state bank
 from seeded LIBERO resets. The command also reconstructs the exact official-state exposure and
 environment seeds from the completed OPSD run metrics:

@@ -25,6 +25,7 @@ from experiments.libero.eval_libero_single import (
 )
 from experiments.libero.libero_utils import (
     LIBERO_ENV_RESOLUTION,
+    capture_libero_observation,
     get_libero_dummy_action,
     get_libero_env,
     invert_gripper_action,
@@ -183,24 +184,6 @@ def validate_opsd_config(cfg: DictConfig, *, world_size: int | None = None) -> d
     }
 
 
-def _capture_current_observation(env: Any) -> Any:
-    current = env
-    visited: set[int] = set()
-    while id(current) not in visited:
-        visited.add(id(current))
-        method = getattr(current, "_get_observations", None)
-        if callable(method):
-            try:
-                return method(force_update=True)
-            except TypeError:
-                return method()
-        next_env = getattr(current, "env", None)
-        if next_env is None:
-            break
-        current = next_env
-    raise AttributeError("LIBERO environment does not expose _get_observations().")
-
-
 def _execute_action_chunk(
     *,
     env: Any,
@@ -234,6 +217,13 @@ def _execute_action_chunk(
             fault_metadata=pipeline.metadata()["faults"],
         )
         pipeline.after_step(env, transition, context)
+        if pipeline.requires_post_step_observation_refresh:
+            next_raw = capture_libero_observation(env)
+            next_obs = pipeline.transform_observation(next_raw, env, context)
+            transition.next_raw_observation = next_raw
+            transition.next_student_observation = next_obs
+            done = bool(env.check_success())
+            transition.done = done
         raw_obs, obs = next_raw, next_obs
         steps_taken += 1
         if done:
@@ -414,7 +404,7 @@ def run_opsd_training(cfg: DictConfig) -> None:
                 paired = capture_paired_observation(
                     env=env,
                     pipeline=pipeline,
-                    capture_raw_observation=lambda: _capture_current_observation(env),
+                    capture_raw_observation=lambda: capture_libero_observation(env),
                     context=pipeline.context(episode_index, env_step),
                 )
                 student_image, student_proprio, _ = _obs_to_model_input(

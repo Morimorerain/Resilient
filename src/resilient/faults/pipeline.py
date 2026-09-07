@@ -27,6 +27,11 @@ class FaultPipeline:
     def enabled(self) -> bool:
         return bool(self.faults)
 
+    @property
+    def requires_post_step_observation_refresh(self) -> bool:
+        """Return whether a fault mutates simulator state after ``env.step``."""
+        return any(fault.requires_post_step_observation_refresh for fault in self.faults)
+
     def context(self, episode_index: int = 0, step_index: int = 0) -> FaultContext:
         return FaultContext(self.seed, int(episode_index), int(step_index))
 
