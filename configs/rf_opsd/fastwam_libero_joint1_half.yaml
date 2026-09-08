@@ -1,0 +1,69 @@
+# @package _global_
+
+defaults:
+  - /train
+  - /fault: structure/panda_joint1_half_motion
+  - /adapter@rf_world_adapter: fastwam_world_lora
+  - override /task: libero_uncond_2cam224_1e-4
+  - _self_
+
+ckpt: checkpoints/fastwam_release/libero_uncond_2cam224.pt
+output_dir: runs/rf_opsd/joint1_retention_p0p5/${now:%Y-%m-%d}_${now:%H-%M-%S}
+resume: null
+
+model:
+  load_text_encoder: true
+  skip_dit_load_from_pretrain: true
+  action_dit_pretrained_path: null
+
+learning_rate: 5.0e-6
+weight_decay: 1.0e-2
+lr_scheduler_type: cosine
+lr_warmup_ratio: 0.05
+max_grad_norm: 0.1
+mixed_precision: bf16
+gradient_accumulation_steps: 1
+save_every: 100
+max_checkpoints: 2
+
+rf_opsd:
+  enabled: true
+  validate_only: false
+  num_epochs: 1
+  epoch_offset: 0
+  dataset_stats_path: checkpoints/fastwam_release/libero_uncond_2cam224_dataset_stats.json
+  distributed:
+    num_processes: 8
+  future_source:
+    type: shadow_action_chunk
+  loss:
+    type: video_flow_matching
+    exclude_initial_latent: true
+    mse_weight: 1.0
+    smooth_l1_weight: 0.0
+    cosine_weight: 0.1
+  rollout:
+    suites: [libero_spatial, libero_object, libero_goal, libero_10]
+    tasks_per_suite: 10
+    # Match the earlier visual-Fault OPSD scale: 40 tasks x 50 official train states.
+    rollouts_per_task: 50
+    schedule_seed: ${seed}
+    environment_seed: ${seed}
+    inference_seed: ${seed}
+    num_steps_wait: 30
+    replan_steps: 10
+    action_horizon: ${eval:'${data.train.num_frames} - 1'}
+    num_inference_steps: ${eval_num_inference_steps}
+    sigma_shift: 5.0
+    rand_device: cpu
+    compile_action_infer: false
+    binarize_gripper: true
+    frame_stride: ${data.train.action_video_freq_ratio}
+    future_frame_steps: [0, 4, 8, 12, 16, 20, 24, 28, 32]
+
+hydra:
+  job:
+    chdir: false
+  run:
+    dir: .
+  output_subdir: null
