@@ -67,6 +67,13 @@ EVALUATION:
     checkpoint: null
     training_config: null
 
+  # Disabled by default. This adapter changes only the Video DiT world branch;
+  # standard infer_action success evaluation is retained as a provenance check.
+  rf_world_adapter:
+    enabled: false
+    checkpoint: null
+    training_config: null
+
   # Disabled by default to preserve the Fast-WAM benchmark path. When enabled,
   # load an external state bank and reject overlap with its training reference.
   initial_state_bank:

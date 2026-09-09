@@ -80,6 +80,18 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Resolved OPSD training YAML defining the adapter layout.",
     )
+    parser.add_argument(
+        "--rf-world-adapter",
+        type=Path,
+        default=None,
+        help="Optional RF-OPSD rf_world_adapter.pt applied to the Video DiT only.",
+    )
+    parser.add_argument(
+        "--rf-world-config",
+        type=Path,
+        default=None,
+        help="Resolved RF-OPSD training YAML defining the world-adapter layout.",
+    )
     parser.add_argument("--dataset-stats", type=Path, default=None)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument(
@@ -169,12 +181,16 @@ def build_run_name(
     fault_config: Mapping[str, Any],
     checkpoint: Path,
     opsd_adapter: Path | None = None,
+    rf_world_adapter: Path | None = None,
 ) -> str:
     pipeline = build_fault_pipeline(fault_config)
     name = f"{pipeline.slug()}__model-{_slug(checkpoint.stem)}"
     if opsd_adapter is not None:
         adapter_id = opsd_adapter.parent.name or opsd_adapter.stem
         name += f"__opsd-{_slug(adapter_id)}"
+    if rf_world_adapter is not None:
+        adapter_id = rf_world_adapter.parent.name or rf_world_adapter.stem
+        name += f"__rf-world-{_slug(adapter_id)}"
     return name
 
 
@@ -332,16 +348,30 @@ def main() -> int:
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint}")
     if (args.opsd_adapter is None) != (args.opsd_config is None):
         raise ValueError("--opsd-adapter and --opsd-config must be provided together.")
+    if (args.rf_world_adapter is None) != (args.rf_world_config is None):
+        raise ValueError(
+            "--rf-world-adapter and --rf-world-config must be provided together."
+        )
+    if args.opsd_adapter is not None and args.rf_world_adapter is not None:
+        raise ValueError("OPSD action and RF world adapters cannot be combined in one run.")
     if (args.state_bank_manifest is None) != (args.training_state_manifest is None):
         raise ValueError(
             "--state-bank-manifest and --training-state-manifest must be provided together."
         )
     opsd_adapter = resolve_path(args.opsd_adapter) if args.opsd_adapter else None
     opsd_config = resolve_path(args.opsd_config) if args.opsd_config else None
+    rf_world_adapter = (
+        resolve_path(args.rf_world_adapter) if args.rf_world_adapter else None
+    )
+    rf_world_config = resolve_path(args.rf_world_config) if args.rf_world_config else None
     if opsd_adapter is not None and not opsd_adapter.is_file():
         raise FileNotFoundError(f"OPSD adapter not found: {opsd_adapter}")
     if opsd_config is not None and not opsd_config.is_file():
         raise FileNotFoundError(f"OPSD config not found: {opsd_config}")
+    if rf_world_adapter is not None and not rf_world_adapter.is_file():
+        raise FileNotFoundError(f"RF world adapter not found: {rf_world_adapter}")
+    if rf_world_config is not None and not rf_world_config.is_file():
+        raise FileNotFoundError(f"RF-OPSD config not found: {rf_world_config}")
     state_bank_manifest = (
         resolve_path(args.state_bank_manifest) if args.state_bank_manifest else None
     )
@@ -358,7 +388,9 @@ def main() -> int:
     fault_config = load_fault_config(args.fault_config, args.severity, args.seed)
     pipeline = build_fault_pipeline(fault_config)
     output_root = resolve_path(args.output_dir)
-    run_dir = output_root / build_run_name(fault_config, checkpoint, opsd_adapter)
+    run_dir = output_root / build_run_name(
+        fault_config, checkpoint, opsd_adapter, rf_world_adapter
+    )
     run_dir.mkdir(parents=True, exist_ok=True)
     preview_suite = args.preview_suite or args.suites[0]
     configuration = {
@@ -367,6 +399,12 @@ def main() -> int:
         "checkpoint": _portable_path(checkpoint),
         "opsd_adapter": _portable_path(opsd_adapter) if opsd_adapter else None,
         "opsd_config": _portable_path(opsd_config) if opsd_config else None,
+        "rf_world_adapter": (
+            _portable_path(rf_world_adapter) if rf_world_adapter else None
+        ),
+        "rf_world_config": (
+            _portable_path(rf_world_config) if rf_world_config else None
+        ),
         "dataset_stats": _portable_path(dataset_stats),
         "gpus": list(args.gpus),
         "suites": list(args.suites),
@@ -422,6 +460,14 @@ def main() -> int:
                 "EVALUATION.opsd_adapter.enabled=true",
                 f"EVALUATION.opsd_adapter.checkpoint={opsd_adapter}",
                 f"EVALUATION.opsd_adapter.training_config={opsd_config}",
+            ]
+        )
+    if rf_world_adapter is not None and rf_world_config is not None:
+        command.extend(
+            [
+                "EVALUATION.rf_world_adapter.enabled=true",
+                f"EVALUATION.rf_world_adapter.checkpoint={rf_world_adapter}",
+                f"EVALUATION.rf_world_adapter.training_config={rf_world_config}",
             ]
         )
     if state_bank_manifest is not None and training_state_manifest is not None:

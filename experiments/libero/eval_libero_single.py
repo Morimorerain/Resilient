@@ -198,6 +198,57 @@ def _load_opsd_adapter(model: torch.nn.Module, cfg: DictConfig) -> None:
     )
 
 
+def _load_rf_world_adapter(model: torch.nn.Module, cfg: DictConfig) -> None:
+    """Load an RF-OPSD Video DiT adapter without changing the action branch."""
+    adapter_cfg = cfg.EVALUATION.get("rf_world_adapter", {})
+    if not bool(adapter_cfg.get("enabled", False)):
+        return
+    if bool(cfg.EVALUATION.get("opsd_adapter", {}).get("enabled", False)):
+        raise ValueError("OPSD action and RF world adapters cannot be combined in one evaluation.")
+    checkpoint = adapter_cfg.get("checkpoint")
+    training_config = adapter_cfg.get("training_config")
+    if checkpoint is None or training_config is None:
+        raise ValueError(
+            "Enabled EVALUATION.rf_world_adapter requires checkpoint and training_config."
+        )
+    checkpoint_path = Path(
+        os.path.expanduser(os.path.expandvars(str(checkpoint)))
+    ).resolve()
+    config_path = Path(
+        os.path.expanduser(os.path.expandvars(str(training_config)))
+    ).resolve()
+    if not checkpoint_path.is_file():
+        raise FileNotFoundError(f"RF world adapter checkpoint not found: {checkpoint_path}")
+    if not config_path.is_file():
+        raise FileNotFoundError(f"RF-OPSD training config not found: {config_path}")
+
+    from resilient.rf_opsd.adapters import (
+        FastWAMWorldLoraConfig,
+        load_fastwam_world_lora,
+    )
+
+    training_cfg = OmegaConf.load(config_path)
+    if training_cfg.get("rf_world_adapter") is None:
+        raise ValueError(
+            f"RF-OPSD training config has no rf_world_adapter section: {config_path}"
+        )
+    lora_cfg = FastWAMWorldLoraConfig.from_config(
+        OmegaConf.to_container(training_cfg.rf_world_adapter, resolve=True)
+    )
+    audit = load_fastwam_world_lora(
+        model,
+        config=lora_cfg,
+        checkpoint=checkpoint_path,
+    )
+    logging.info(
+        "Loaded RF world LoRA adapter %s using %s (%d targets, %d trainable parameters).",
+        checkpoint_path,
+        config_path,
+        audit["target_count"],
+        audit["trainable_parameters"],
+    )
+
+
 def _center_crop_resize(image: np.ndarray, width: int, height: int) -> np.ndarray:
     pil_image = Image.fromarray(image)
     src_w, src_h = pil_image.size
@@ -1128,6 +1179,7 @@ def eval_single_process(cfg: DictConfig):
     model = instantiate(cfg.model, model_dtype=model_dtype, device=model_device)
     _load_model_checkpoint(model, str(cfg.ckpt))
     _load_opsd_adapter(model, cfg)
+    _load_rf_world_adapter(model, cfg)
     model = model.to(model_device).eval()
 
     dataset_stats_path = _resolve_dataset_stats_path(cfg)
