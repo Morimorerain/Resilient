@@ -269,6 +269,30 @@ class FaultPipelineTests(unittest.TestCase):
         )
         env.close()
 
+    def test_fault_runtime_state_can_be_copied_to_a_shadow_environment(self) -> None:
+        source = install_fault_pipeline(
+            _FakeJointEnvironment(),
+            build_fault_pipeline(_joint_motion_config()),
+            initial_episode_index=7,
+        )
+        shadow = install_fault_pipeline(
+            _FakeJointEnvironment(),
+            build_fault_pipeline(_joint_motion_config()),
+            initial_episode_index=7,
+        )
+        source.reset()
+        source.step(np.zeros(7, dtype=np.float64))
+        state = source.fault_runtime_state_dict()
+        shadow.reset()
+        shadow.set_init_state(source.sim.data.qpos.copy())
+        observation = shadow.load_fault_runtime_state_dict(state)
+        self.assertEqual(state["episode_index"], 7)
+        self.assertEqual(state["step_index"], 1)
+        np.testing.assert_allclose(observation["qpos"], source.sim.data.qpos)
+        self.assertEqual(shadow.fault_runtime_state_dict(), state)
+        source.close()
+        shadow.close()
+
     def test_joint_motion_fault_supports_multiple_targets(self) -> None:
         raw_env = _FakeJointEnvironment()
         pipeline = build_fault_pipeline(

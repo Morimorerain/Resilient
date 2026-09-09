@@ -14,12 +14,14 @@ Resilient is a reproducibility-first research codebase built on [FastWAM](https:
 - The standalone Python/CUDA stack, all pinned assets, a headless LIBERO EGL reset, the one-episode integration evaluation, and the full 2,000-episode benchmark are validated on the hardware below.
 - The severity-aware Fault layer and OPSD-Flow implementation have reached CPU/configuration/
   simulator smoke validation; full multi-GPU OPSD training is not yet validated.
+- Outcome-Guided FPO for the simulator-owned joint-1 50% motion-retention Fault is implemented and
+  covered by CPU/configuration tests; a real multi-GPU optimization smoke test is still pending.
 
 ## Repository layout
 
 ```text
 Resilient/
-├── configs/                       # Hydra configs, including Fault/adapter/OPSD parameters
+├── configs/                       # Hydra configs, including Fault/OPSD/outcome-FPO parameters
 ├── experiments/libero/            # LIBERO evaluation plus a default-off Fault hook
 ├── src/fastwam/                   # Pinned FastWAM plus registered default-off patches
 ├── src/resilient/                 # Resilient extensions and adapters
@@ -496,6 +498,124 @@ and eight-GPU execution are the supported defaults; full OPSD training has not y
 timed, so its final peak-memory requirement is not yet claimed.
 The current validation covers CPU unit tests, Hydra composition, LoRA injection/auditing, and a
 real LIBERO paired-camera render, but not model loading or a distributed optimizer step.
+
+## Outcome-Guided FPO for embodied Fault recovery
+
+This path implements a single-stage recovery policy without Fault-representation pretraining. It
+adapts the conditional-flow policy-gradient estimator from
+[Flow Matching Policy Gradients / FPO](https://github.com/akanazawa/fpo), pinned to commit
+`418c2554f7cd22d52e14c07d951280929d73bf2f` in `manifests/upstream.json`. The implementation is an
+independent PyTorch adaptation of the repository's Apache-2.0 Playground objective; no MuJoCo or
+JAX runtime code is vendored.
+
+The frozen base Fast-WAM is the Teacher and evaluator. From the same current image, language, and
+proprioception as the Student, its Video DiT first predicts a nominal nine-frame future with the
+released 10-step video scheduler. The Teacher target is the temporal-change representation at
+Video DiT block 19, evaluated at training timestep 500. Each Student samples four final normalized
+32x7 action chunks with Fast-WAM's unchanged 10-step action sampler. One shadow simulator is
+restored to the same LIBERO state and the same environment-owned Fault state before each of the
+four candidates; each candidate is executed for all 32 actions and recorded at steps
+`0,4,...,32`. The frozen Teacher
+network encodes each realized video at the same layer, future tokens, timestep, and noise. The only
+reward is the mean future-token cosine similarity to the nominal temporal change. Success,
+progress, collision, Fault metadata, and simulator reward are never added to the policy reward.
+
+FPO treats the native deterministic sampler as a black box; it does not invent an SDE and does not
+use denoising-transition log probabilities. For every sampled final action `A`, eight reproducible
+Monte Carlo pairs draw continuous action timestep `t` and Gaussian noise `epsilon`. Fast-WAM's
+native training scheduler constructs `x_t=(1-t)A+t*epsilon`, its action expert predicts velocity
+`v`, and the scorer uses `epsilon_hat=x_t+(1-t)v`. The per-pair conditional flow-matching score is
+the mean squared error between `epsilon_hat` and `epsilon`. Old and current scores share the exact
+same action, timestep, and noise; their eight losses are averaged before computing
+`ratio=exp(loss_old-loss_current)`. The PPO-style ratio clip is 0.05 and its numerical log-ratio
+guard is `[-3,3]`.
+
+The four same-state rewards provide a leave-one-out standardized advantage. This is only a
+same-state control variate, not a GRPO model of the ten denoising steps. Reward-tied groups below
+the configured standard-deviation floor perform a zero update. Each on-policy collection is reused
+for two FPO update epochs. The frozen checkpoint, VAE, and text encoder never update; a zero-start
+Recovery LoRA is trained over the same high-level scope as Fast-WAM training:
+`video_expert`, `action_expert`, and `proprio_encoder`. The default adapter is rank 64, alpha 128,
+dropout 0; AdamW uses learning rate `1e-6`, zero weight decay, bf16, and gradient norm 0.1.
+
+The implementation is separated by responsibility:
+
+| Path | Responsibility |
+| --- | --- |
+| `src/resilient/outcome_fpo/outcome.py` | Frozen nominal Video DiT target and cosine-only outcome reward |
+| `src/resilient/outcome_fpo/collector.py` | Same-state shadow restoration and 32-action/9-frame alignment |
+| `src/resilient/outcome_fpo/policy.py` | Native action sampling and Fast-WAM conditional-flow scores |
+| `src/resilient/outcome_fpo/advantage.py` | Leave-one-out same-state advantages and tied-group guard |
+| `src/resilient/outcome_fpo/objective.py` | FPO loss ratio and clipped surrogate objective |
+| `src/resilient/outcome_fpo/trainer.py` | Distributed updates, short-lived buffers, and complete resume state |
+| `src/resilient/outcome_fpo/runtime.py` | LIBERO schedule, split checks, provenance, logging, and orchestration |
+| `configs/outcome_fpo/fastwam_libero_joint1_half.yaml` | Reproducible first experiment and all tunable parameters |
+| `scripts/resilient/train_outcome_fpo.sh` | Strict 4/8-GPU Accelerate/ZeRO-2 launcher |
+
+The first experiment reuses the generic Fault pipeline through
+`configs/fault/structure/panda_joint1_half_motion.yaml`: MuJoCo joint
+`robot0_joint1` retains 0.5 of its nominal per-step displacement. The Fault is installed in the
+simulator and therefore applies independently of Fast-WAM or this optimizer. No Fault-specific
+logic is duplicated in the FPO modules.
+
+Training matches the earlier visual-Fault OPSD scale: one epoch, all 40 standard LIBERO tasks, and
+official initial states 0--49 once per task, for 2,000 same-state groups and 8,000 candidate
+rollouts. Base seed 42 deterministically derives schedule, environment, action-inference, Teacher,
+and Monte Carlo seeds from sample identity. Validation uses the existing
+`data/libero_state_banks/opsd_step500_unseen_v1/validation_manifest.json`, generated from base seed
+104729. Startup requires both its training-reference manifest and validation manifest and rejects
+any state-hash or environment-seed overlap. Validation states are never loaded by training.
+
+After installing the normal project environment and downloading the already documented Fast-WAM
+checkpoint/statistics and LIBERO assets, validate the full Hydra configuration without CUDA:
+
+```bash
+python scripts/resilient/train_outcome_fpo.py outcome_fpo.validate_only=true
+```
+
+Start on exactly four or eight visible GPUs. Paths remain repository-relative unless explicitly
+overridden:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3 \
+  bash scripts/resilient/train_outcome_fpo.sh 4 \
+  output_dir=runs/outcome_fpo/joint1_half_seed42
+
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
+  bash scripts/resilient/train_outcome_fpo.sh 8 \
+  output_dir=runs/outcome_fpo/joint1_half_seed42_8gpu
+```
+
+The default global collection contains eight groups: two groups per rank on four GPUs or one group
+per rank on eight GPUs. Checkpoints are written only after a complete collection under
+`<output_dir>/checkpoints/state/step_XXXXXXXX/` and include Accelerate/ZeRO optimizer and RNG state,
+`recovery_adapter.pt`, `trainer_state.json`, and the resolved configuration/provenance in the run
+root. Resume with `resume=auto` and the identical explicit output directory, or provide one state
+directory. A resolved-config hash mismatch fails closed. `rollouts_rank_XX.jsonl` records state,
+seed, four rewards, and diagnostic success flags; the success flags are not part of the reward.
+
+Evaluate a completed Recovery LoRA with the existing generic Fast-WAM LoRA loader and the unseen
+state bank. The option retains its historical `opsd` name but accepts this identical adapter
+layout:
+
+```bash
+python scripts/resilient/evaluate_fault.py \
+  --fault-config configs/fault/structure/panda_joint1_half_motion.yaml \
+  --gpus 0,1,2,3 \
+  --checkpoint checkpoints/fastwam_release/libero_uncond_2cam224.pt \
+  --opsd-adapter runs/outcome_fpo/joint1_half_seed42/checkpoints/state/step_XXXXXXXX/recovery_adapter.pt \
+  --opsd-config runs/outcome_fpo/joint1_half_seed42/resolved_config.yaml \
+  --state-bank-manifest data/libero_state_banks/opsd_step500_unseen_v1/validation_manifest.json \
+  --training-state-manifest data/libero_state_banks/opsd_step500_unseen_v1/training_reference_manifest.json \
+  --output-dir evaluate_results/outcome_fpo/joint1_half_seed42
+```
+
+The reference platform remains Linux, CUDA 12.8, bf16, and four or eight RTX 6000 Ada 48 GB GPUs.
+The implementation intentionally reuses the existing OPSD ZeRO-2 launcher configuration and adds
+no Python dependency, so `requirements*.txt`, the lock, and environment setup are unchanged. Real
+multi-GPU model loading, peak memory, optimizer-step behavior, throughput, and final recovery
+quality have not yet been smoke-tested; do not treat the current code-only validation as an
+experimental result. Generated runs and checkpoints remain ignored by Git.
 
 ## Extension switches and baseline protection
 

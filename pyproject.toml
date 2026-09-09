@@ -62,6 +62,7 @@ resilient = "resilient.__main__:main"
 Repository = "https://github.com/Morimorerain/Resilient"
 FastWAM = "https://github.com/yuantianyuan01/FastWAM"
 OPSD = "https://github.com/siyan-zhao/OPSD"
+FPO = "https://github.com/akanazawa/fpo"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

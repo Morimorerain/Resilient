@@ -15,5 +15,12 @@
     "commit": "c1b2b01188b14afbaf7ce14ba8aecd58908589ae",
     "license": null,
     "note": "Algorithm and configuration reference only. The inspected revision has no repository license file, so Resilient uses a clean adaptation and does not copy OPSD source."
+  },
+  "fpo": {
+    "repository": "https://github.com/akanazawa/fpo.git",
+    "commit": "418c2554f7cd22d52e14c07d951280929d73bf2f",
+    "license": "Apache-2.0",
+    "source_scope": "playground/src/flow_policy/fpo.py",
+    "note": "The outcome-FPO objective is an independent PyTorch adaptation of the Apache-2.0 Playground implementation; MuJoCo and JAX runtime code is not vendored."
   }
 }

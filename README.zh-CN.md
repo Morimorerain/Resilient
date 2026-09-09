@@ -14,12 +14,14 @@ Resilient 是一个以可复现性为首要目标、基于 [FastWAM](https://git
 - 已在下方硬件上验证独立 Python/CUDA 环境、全部固定资产、LIBERO EGL 无界面 reset、单回合集成评测与完整 2,000 回合基准。
 - 带 severity 的 Fault 层和 OPSD-Flow 已完成 CPU、配置与仿真器烟测，尚未验证正式多卡 OPSD
   训练。
+- 面向仿真器级第一关节 50% 运动保留 Fault 的 Outcome-Guided FPO 已完成实现及 CPU/配置测试；
+  尚未进行真实多卡优化烟测。
 
 ## 仓库结构
 
 ```text
 Resilient/
-├── configs/                       # Hydra 配置，包含 Fault/adapter/OPSD 参数
+├── configs/                       # Hydra 配置，包含 Fault/OPSD/outcome-FPO 参数
 ├── experiments/libero/            # LIBERO 评测及默认关闭的 Fault hook
 ├── src/fastwam/                   # 固定 FastWAM 及已登记的默认关闭补丁
 ├── src/resilient/                 # Resilient 扩展与适配器
@@ -467,6 +469,110 @@ rank。每个 task 的 LIBERO 初始状态 0--49 恰好各使用一次；seed �
 卡。由于尚未正式运行或计时 OPSD 训练，目前不声明其最终峰值显存需求。本阶段已验证 CPU
 单元测试、Hydra 配置组合、LoRA 插入/
 审计，以及真实 LIBERO 相机干净/故障配对渲染，但尚未验证模型载入与多卡 optimizer step。
+
+## 面向具身 Fault 恢复的 Outcome-Guided FPO
+
+该路径不做 Fault representation 预训练，而是直接进行单阶段恢复策略优化。条件流策略梯度估计
+参考 [Flow Matching Policy Gradients / FPO](https://github.com/akanazawa/fpo)，具体版本固定为
+`manifests/upstream.json` 中的提交
+`418c2554f7cd22d52e14c07d951280929d73bf2f`。本项目根据其 Apache-2.0 Playground 目标独立完成
+PyTorch 适配，没有引入上游 MuJoCo 或 JAX 运行代码。
+
+冻结的 Fast-WAM 基座同时充当 Teacher 和评估器。Teacher 使用与 Student 相同的当前图像、语言
+和 proprio，由 Video DiT 通过发布版 10 步 video scheduler 预测正常状态下的九帧未来，并在
+训练 timestep 500 读取 Video DiT 第 19 个 block 的时间变化表示。Student 使用未修改的 10 步
+action sampler，从同一状态采样 4 个最终归一化 `32x7` action chunk。每个候选开始前，都把同一
+shadow 环境恢复到完全相同的 LIBERO simulator state 与仿真器级 Fault 状态，再完整执行 32 个
+动作并在 `0,4,...,32` 步采集九帧。冻结 Teacher 视觉网络以相同层、future token、timestep 和
+noise 编码各候选真实未来。唯一 reward 是其 future-token 时间变化与正常目标之间的平均 cosine
+similarity；success、progress、collision、Fault metadata 和 simulator reward 都不会加入策略
+reward。
+
+FPO 把 Fast-WAM 原生确定性 sampler 当成黑盒，不构造 SDE，也不使用去噪 transition log
+probability。对每个最终动作 `A`，独立采样 8 组可复现的连续 action timestep `t` 和高斯噪声
+`epsilon`。Fast-WAM 原训练 scheduler 构造 `x_t=(1-t)A+t*epsilon`，action expert 预测 velocity
+`v`，打分器计算 `epsilon_hat=x_t+(1-t)v`；每组条件 flow-matching score 是
+`epsilon_hat` 与 `epsilon` 的均方误差。old/current 共用完全相同的动作、timestep 和 noise，先对
+8 项 loss 求均值，再计算 `ratio=exp(loss_old-loss_current)`。PPO 式 ratio clip 为 0.05，数值
+保护将 log-ratio 限制在 `[-3,3]`。
+
+同一状态的 4 个 reward 使用 leave-one-out 标准化 advantage。这只是同状态 control variate，
+不是把 10 个去噪步建模为 GRPO；组内 reward 标准差低于阈值时做零更新。每批 on-policy 采集
+复用 2 个 FPO update epoch。发布 checkpoint、VAE 和 text encoder 永久冻结；零起点 Recovery
+LoRA 覆盖与 Fast-WAM 原训练一致的高层范围：`video_expert`、`action_expert` 和
+`proprio_encoder`。默认 rank 64、alpha 128、dropout 0；AdamW 使用学习率 `1e-6`、weight decay
+0、bf16 和梯度范数 0.1。
+
+代码按职责解耦：
+
+| 路径 | 作用 |
+| --- | --- |
+| `src/resilient/outcome_fpo/outcome.py` | 冻结 nominal Video DiT target 与仅含 cosine 的 outcome reward |
+| `src/resilient/outcome_fpo/collector.py` | 同状态 shadow 恢复及 32-action/9-frame 对齐 |
+| `src/resilient/outcome_fpo/policy.py` | 原生动作采样与 Fast-WAM conditional-flow score |
+| `src/resilient/outcome_fpo/advantage.py` | leave-one-out 同状态 advantage 与同分组保护 |
+| `src/resilient/outcome_fpo/objective.py` | FPO loss ratio 与裁剪 surrogate objective |
+| `src/resilient/outcome_fpo/trainer.py` | 分布式更新、短生命周期 buffer 和完整断点状态 |
+| `src/resilient/outcome_fpo/runtime.py` | LIBERO 日程、split 校验、来源记录、日志与调度 |
+| `configs/outcome_fpo/fastwam_libero_joint1_half.yaml` | 第一版可复现实验及全部可调参数 |
+| `scripts/resilient/train_outcome_fpo.sh` | 严格限制 4/8 卡的 Accelerate/ZeRO-2 入口 |
+
+第一版直接复用 `configs/fault/structure/panda_joint1_half_motion.yaml` 的通用 Fault 管线：MuJoCo
+关节 `robot0_joint1` 的每环境步实际位移只保留 nominal 位移的 0.5。Fault 安装在仿真器中，因而
+独立于 Fast-WAM 和本优化器；FPO 模块没有复制任何 Fault 专属实现。
+
+训练规模沿用先前视觉 Fault OPSD：1 epoch、全部 40 个标准 LIBERO task、每个 task 使用官方
+初始状态 0--49 各一次，共 2,000 个同状态组与 8,000 个候选 rollout。base seed 42 根据 sample
+身份确定性派生 schedule、environment、action inference、Teacher 和 Monte Carlo seed。验证继续
+使用 `data/libero_state_banks/opsd_step500_unseen_v1/validation_manifest.json`，其 base seed 为
+104729。程序启动时强制同时加载 training-reference 与 validation manifest，并在状态哈希或
+environment seed 有任何交集时拒绝运行；训练过程不会加载验证状态。
+
+安装常规项目环境并按前文下载 Fast-WAM checkpoint/statistics 与 LIBERO 资产后，先执行不使用
+CUDA 的完整 Hydra 配置检查：
+
+```bash
+python scripts/resilient/train_outcome_fpo.py outcome_fpo.validate_only=true
+```
+
+训练必须使用恰好 4 张或 8 张可见 GPU；除非显式覆盖，所有路径均相对仓库：
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3 \
+  bash scripts/resilient/train_outcome_fpo.sh 4 \
+  output_dir=runs/outcome_fpo/joint1_half_seed42
+
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
+  bash scripts/resilient/train_outcome_fpo.sh 8 \
+  output_dir=runs/outcome_fpo/joint1_half_seed42_8gpu
+```
+
+默认每次全局采集 8 个 group：4 卡时每 rank 2 个，8 卡时每 rank 1 个。checkpoint 只在完整采集
+边界写入 `<output_dir>/checkpoints/state/step_XXXXXXXX/`，其中包含 Accelerate/ZeRO optimizer 与
+RNG 状态、`recovery_adapter.pt`、`trainer_state.json`；解析后的配置与 provenance 位于 run 根
+目录。使用同一显式输出目录加 `resume=auto` 恢复，或直接指定某个 state 目录；解析配置哈希不
+一致会立即拒绝恢复。`rollouts_rank_XX.jsonl` 记录状态、seed、4 个 reward 以及仅供诊断的成功
+标志，成功标志不会参与 reward。
+
+训练完成后，使用现有通用 Fast-WAM LoRA loader 和未见状态库评测 Recovery LoRA。参数仍保留
+历史 `opsd` 名称，但能加载结构完全相同的本 adapter：
+
+```bash
+python scripts/resilient/evaluate_fault.py \
+  --fault-config configs/fault/structure/panda_joint1_half_motion.yaml \
+  --gpus 0,1,2,3 \
+  --checkpoint checkpoints/fastwam_release/libero_uncond_2cam224.pt \
+  --opsd-adapter runs/outcome_fpo/joint1_half_seed42/checkpoints/state/step_XXXXXXXX/recovery_adapter.pt \
+  --opsd-config runs/outcome_fpo/joint1_half_seed42/resolved_config.yaml \
+  --state-bank-manifest data/libero_state_banks/opsd_step500_unseen_v1/validation_manifest.json \
+  --training-state-manifest data/libero_state_banks/opsd_step500_unseen_v1/training_reference_manifest.json \
+  --output-dir evaluate_results/outcome_fpo/joint1_half_seed42
+```
+
+参考平台仍为 Linux、CUDA 12.8、bf16 及 4/8 张 RTX 6000 Ada 48 GB。实现复用现有 OPSD
+ZeRO-2 启动配置，没有新增 Python 依赖，因此 `requirements*.txt`、环境锁和安装流程保持不变。
+当前尚未完成真实多卡模型加载、显存峰值、optimizer step、吞吐量和最终恢复效果烟测，不能将
+本轮代码级验证当作实验结果。生成的 run 和 checkpoint 均由 Git 忽略。
 
 ## 扩展开关与基线保护
 

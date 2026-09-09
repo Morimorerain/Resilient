@@ -1,0 +1,88 @@
+# @package _global_
+
+defaults:
+  - /train
+  - /fault: structure/panda_joint1_half_motion
+  - /adapter: fastwam_aligned_lora
+  - override /task: libero_uncond_2cam224_1e-4
+  - _self_
+
+ckpt: checkpoints/fastwam_release/libero_uncond_2cam224.pt
+output_dir: runs/outcome_fpo/joint1_retention_p0p5/${now:%Y-%m-%d}_${now:%H-%M-%S}
+resume: null
+
+model:
+  load_text_encoder: true
+  skip_dit_load_from_pretrain: true
+  action_dit_pretrained_path: null
+
+learning_rate: 1.0e-6
+weight_decay: 0.0
+mixed_precision: bf16
+max_grad_norm: 0.1
+save_every: 100
+max_checkpoints: 2
+
+outcome_fpo:
+  validate_only: false
+  num_epochs: 1
+  epoch_offset: 0
+  dataset_stats_path: checkpoints/fastwam_release/libero_uncond_2cam224_dataset_stats.json
+
+  distributed:
+    num_processes: 4
+
+  split:
+    # Training uses official LIBERO states 0--49. These manifests make the
+    # already established seed and simulator-state separation fail closed.
+    training_reference_manifest: data/libero_state_banks/opsd_step500_unseen_v1/training_reference_manifest.json
+    validation_manifest: data/libero_state_banks/opsd_step500_unseen_v1/validation_manifest.json
+
+  rollout:
+    suites: [libero_spatial, libero_object, libero_goal, libero_10]
+    rollouts_per_task: 50
+    schedule_seed: ${seed}
+    environment_seed: ${seed}
+    inference_seed: ${seed}
+    num_steps_wait: 30
+    action_horizon: ${eval:'${data.train.num_frames} - 1'}
+    num_inference_steps: ${eval_num_inference_steps}
+    # Null preserves the released action scheduler's native shift=1.0.
+    sigma_shift: null
+    rand_device: cpu
+    compile_action_infer: false
+    binarize_gripper: true
+    future_frame_steps: [0, 4, 8, 12, 16, 20, 24, 28, 32]
+
+  outcome:
+    type: frozen_nominal_video_hidden_cosine
+    layer_index: 19
+    reward_timestep: 500.0
+    num_video_frames: 9
+    num_inference_steps: ${eval_num_inference_steps}
+    # Null preserves the released video scheduler's native shift=5.0.
+    sigma_shift: null
+
+  fpo:
+    group_size: 4
+    groups_per_global_update: 8
+    num_mc_samples: 8
+    mc_seed: ${seed}
+    loss_type: epsilon_mse
+    average_losses_before_exp: true
+    clipping_epsilon: 0.05
+    log_ratio_clip: 3.0
+    update_epochs: 2
+    advantage_type: leave_one_out_standardized
+    advantage_eps: 1.0e-6
+    advantage_clip: 5.0
+    minimum_reward_std: 1.0e-4
+    entropy_coefficient: 0.0
+    kl_coefficient: 0.0
+
+hydra:
+  job:
+    chdir: false
+  run:
+    dir: .
+  output_subdir: null

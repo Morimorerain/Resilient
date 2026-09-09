@@ -51,11 +51,20 @@ class FastWAMActionFlowScorer:
     ) -> torch.Tensor:
         """Return the vector field at a fixed Student latent and timestep."""
         model = self.model
+        latent = step.latent.to(device=model.device, dtype=model.torch_dtype)
         image = conditioning.input_image
         if image.ndim == 3:
             image = image.unsqueeze(0)
         image = image.to(device=model.device, dtype=model.torch_dtype)
-        first_frame_latents = model._encode_input_image_latents_tensor(image)
+        if image.shape[0] not in {1, latent.shape[0]}:
+            raise ValueError("Conditioning image batch must be one or match the latent batch.")
+        if image.shape[0] > 1 and not torch.equal(image, image[:1].expand_as(image)):
+            raise ValueError(
+                "Batched image scoring currently requires repeated copies of one frame."
+            )
+        first_frame_latents = model._encode_input_image_latents_tensor(image[:1])
+        if latent.shape[0] > 1:
+            first_frame_latents = first_frame_latents.expand(latent.shape[0], -1, -1, -1, -1)
         context, context_mask = self._context(conditioning)
         timestep_video = torch.zeros(
             (first_frame_latents.shape[0],),
@@ -84,7 +93,6 @@ class FastWAMActionFlowScorer:
             ),
         )
         video_seq_len = int(video_tokens.shape[1])
-        latent = step.latent.to(device=model.device, dtype=model.torch_dtype)
         timestep = step.timestep.to(device=model.device, dtype=model.torch_dtype)
         attention_mask = model._build_mot_attention_mask(
             video_seq_len=video_seq_len,
