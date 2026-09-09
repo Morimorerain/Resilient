@@ -299,23 +299,6 @@ class FaultPipelineTests(unittest.TestCase):
         self.assertEqual(env.fault_metadata["activation"], "environment_startup")
         env.close()
 
-    def test_fault_runtime_coordinates_can_be_copied_to_shadow_environment(self) -> None:
-        main = install_fault_pipeline(
-            _FakeJointEnvironment(), build_fault_pipeline(_joint_motion_config())
-        )
-        shadow = install_fault_pipeline(
-            _FakeJointEnvironment(), build_fault_pipeline(_joint_motion_config())
-        )
-        main.reset()
-        shadow.reset()
-        main.step(np.zeros(7, dtype=np.float64))
-        main.step(np.zeros(7, dtype=np.float64))
-        shadow.load_fault_runtime_state_dict(main.fault_runtime_state_dict())
-
-        self.assertEqual(shadow.fault_runtime_state_dict(), main.fault_runtime_state_dict())
-        main.close()
-        shadow.close()
-
     def test_simulator_level_faults_compose_in_one_environment(self) -> None:
         config = _joint_motion_config(["robot0_joint1"], retention=0.5)
         second = _joint_motion_config(["robot0_joint3"], retention=0.5)["pipeline"][

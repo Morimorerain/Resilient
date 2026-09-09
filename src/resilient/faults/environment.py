@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import copy
 from typing import Any
 
 from .pipeline import FaultPipeline
@@ -72,32 +71,6 @@ class FaultedEnvironment:
     @property
     def last_transition(self) -> FaultTransition | None:
         return self._last_transition
-
-    def fault_runtime_state_dict(self) -> dict[str, Any]:
-        """Return portable Fault coordinates for a same-state shadow environment."""
-        return {
-            "schema_version": 1,
-            "episode_index": self._episode_index,
-            "next_episode_index": self._next_episode_index,
-            "step_index": self._step_index,
-            "pipeline": copy.deepcopy(self.fault_pipeline.state_dict()),
-        }
-
-    def load_fault_runtime_state_dict(self, state: dict[str, Any]) -> Any:
-        """Synchronize Fault time/state without loading another simulator state."""
-        if int(state.get("schema_version", -1)) != 1:
-            raise ValueError("Unsupported FaultedEnvironment runtime-state schema.")
-        episode_index = int(state["episode_index"])
-        next_episode_index = int(state["next_episode_index"])
-        step_index = int(state["step_index"])
-        if min(episode_index, next_episode_index, step_index) < 0:
-            raise ValueError("Fault runtime coordinates must be non-negative.")
-        self.fault_pipeline.load_state_dict(copy.deepcopy(state["pipeline"]))
-        self._episode_index = episode_index
-        self._next_episode_index = next_episode_index
-        self._step_index = step_index
-        self._last_transition = None
-        return self._publish_observation(capture_current_observation(self._environment))
 
     def _publish_observation(self, raw_observation: Any) -> Any:
         self._raw_observation = raw_observation

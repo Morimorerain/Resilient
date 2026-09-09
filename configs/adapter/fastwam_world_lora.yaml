@@ -1,4 +1,0 @@
-rank: 64
-alpha: 128
-dropout: 0.0
-cap_rank_to_dimension: true

@@ -468,49 +468,6 @@ rank。每个 task 的 LIBERO 初始状态 0--49 恰好各使用一次；seed �
 单元测试、Hydra 配置组合、LoRA 插入/
 审计，以及真实 LIBERO 相机干净/故障配对渲染，但尚未验证模型载入与多卡 optimizer step。
 
-## RF-OPSD 真实未来世界表征蒸馏
-
-RF-OPSD 将发布版 Fast-WAM VAE 作为冻结的表征 Teacher。Student 从当前 Fault observation
-生成32步 action chunk；同步的 shadow 环境在同一 `structure.joint_motion` Fault 下真实执行
-该 chunk，并在动作步 `[0,4,...,32]` 采集双相机九帧视频。Teacher 将视频编码到 Fast-WAM
-原生缩放 latent 空间；仅 Video DiT 的 LoRA 使用 Fast-WAM 原始 flow-matching target 学习未来
-latent，固定的首 latent 不计入 loss。
-
-首个正式实验只使用 `configs/fault/structure/panda_joint1_half_motion.yaml`：
-`robot0_joint1` 在每个环境步仅保留50%的 nominal displacement。完整参数位于
-`configs/rf_opsd/fastwam_libero_joint1_half.yaml`。默认规模与先前视觉 Fault OPSD 一致：四个
-LIBERO suite、每 suite 十个 task、每 task 使用50个官方初始状态，每 epoch 共2,000个
-fragment，默认一个 epoch。基础 seed 为42，并由 `(epoch,suite,task,rollout)` 确定性派生独立
-environment/inference seed，因此任务打乱和断点续训不会改变样本。
-
-先进行无 CUDA 配置检查，再使用4卡或8卡启动：
-
-```bash
-python scripts/resilient/train_rf_opsd.py rf_opsd.validate_only=true
-CUDA_VISIBLE_DEVICES=0,1,2,3 \
-  bash scripts/resilient/train_rf_opsd.sh 4 \
-  output_dir=runs/rf_opsd/joint1_half_4gpu
-CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
-  bash scripts/resilient/train_rf_opsd.sh 8 \
-  output_dir=runs/rf_opsd/joint1_half_8gpu
-```
-
-仅可在解析配置完全一致时使用 `resume=auto`，也可显式指定已经完成的
-`checkpoints/state/step_XXXXXXXX`。每个 checkpoint 保存严格的 Video DiT-only
-`rf_world_adapter.pt`、DeepSpeed optimizer/scheduler/RNG、训练坐标和配置哈希。参考 RTX 6000
-Ada 48 GB 四卡真实烟测每卡约占28.6 GB，一个 ZeRO-2 状态约52.3 GB；参考平台为 Linux、
-CUDA 12.8、bf16，支持4卡与8卡。
-
-训练使用 LIBERO 官方 state 0--49。最终测试必须同时提供
-`data/libero_state_banks/opsd_step500_unseen_v1/validation_manifest.json` 和同目录
-`training_reference_manifest.json`。该测试库以基础 seed 104729 独立生成，每 task 50个状态，
-训练/测试 state hash 与 generation seed 交集均为0；禁止用它调参。
-
-RF-OPSD v1 只学习世界表征，不做动作纠正。`infer_action` 生成训练 rollout 时强制关闭 world
-LoRA，因此数据收集策略仍是发布版 Fast-WAM。32步 shadow 结果在 manifest 中记为
-`realized_counterfactual_student_action_chunk`，不能描述为主环境10步重规划轨迹。后续 recovery
-必须显式把因果历史 residual 变为 fault condition，才能影响 action。
-
 ## 扩展开关与基线保护
 
 以下规则为强制要求：
@@ -528,7 +485,6 @@ LoRA，因此数据收集策略仍是发布版 Fast-WAM。32步 shadow 结果在
 | `EVALUATION.opsd_adapter.enabled` | `false` | 在 Fast-WAM 基座 checkpoint 后注入并加载 OPSD LoRA | 关闭时不注入任何模块，基线评测不变 |
 | `EVALUATION.fault_detection.enabled` | `false` | 在 LIBERO 评测中采集严格对齐的 Video DiT/VAE latent 指标 | 关闭时不执行联合视频推理、真实 latent 编码或指标输出 |
 | `FastWAM.infer_joint` 的 `return_video_latents` / `decode_video` | `false` / `true` | 暴露最终视频 latent，并允许 Fault 指标跳过图像解码 | 默认值保持原来的 `video`/`action` 返回与解码行为 |
-| `rf_opsd.enabled`（仅 RF-OPSD 专用入口） | 专用配置外为 `false` | 从 Fault 真实未来训练 Video DiT-only world LoRA | 基线评测与 Fast-WAM 源码不变，rollout 动作生成时 adapter 被禁用 |
 
 ## 开发检查
 

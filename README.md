@@ -497,55 +497,6 @@ timed, so its final peak-memory requirement is not yet claimed.
 The current validation covers CPU unit tests, Hydra composition, LoRA injection/auditing, and a
 real LIBERO paired-camera render, but not model loading or a distributed optimizer step.
 
-## RF-OPSD realized-future world distillation
-
-RF-OPSD uses the released Fast-WAM VAE as a frozen representation Teacher. The Student generates
-a 32-action chunk from a faulted current observation. A synchronized shadow environment realizes
-that exact chunk under `structure.joint_motion`, sampling frames at action steps
-`[0,4,...,32]`. The Teacher encodes the resulting nine-frame, two-camera video in Fast-WAM's
-native scaled latent space. A video-only LoRA learns Fast-WAM's original flow-matching target on
-future latent slices; the fixed initial latent is excluded from the loss.
-
-The committed first experiment is limited to
-`configs/fault/structure/panda_joint1_half_motion.yaml`: `robot0_joint1` retains 50% of its nominal
-displacement at every environment step. Its parameters are in
-`configs/rf_opsd/fastwam_libero_joint1_half.yaml`. The default scale matches the earlier visual
-Fault OPSD run: four LIBERO suites, ten tasks per suite, 50 official initial states per task, 2,000
-fragments per epoch, and one epoch. Base seed 42 is deterministically expanded from
-`(epoch,suite,task,rollout)` into separate environment and inference seeds, so task shuffling and
-resume do not alter a sample.
-
-Validate the experiment without CUDA, then launch on four or eight GPUs:
-
-```bash
-python scripts/resilient/train_rf_opsd.py rf_opsd.validate_only=true
-CUDA_VISIBLE_DEVICES=0,1,2,3 \
-  bash scripts/resilient/train_rf_opsd.sh 4 \
-  output_dir=runs/rf_opsd/joint1_half_4gpu
-CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
-  bash scripts/resilient/train_rf_opsd.sh 8 \
-  output_dir=runs/rf_opsd/joint1_half_8gpu
-```
-
-Resume the same resolved experiment with `resume=auto`, or provide a completed
-`checkpoints/state/step_XXXXXXXX` directory. Each checkpoint contains the strict video-only
-`rf_world_adapter.pt`, DeepSpeed optimizer/scheduler/RNG state, trainer coordinates, and resolved
-configuration hash. Four-GPU smoke validation on RTX 6000 Ada 48 GB cards used about 28.6 GB per
-GPU; one ZeRO-2 state occupied approximately 52.3 GB. The reference platform is Linux, CUDA 12.8,
-bf16, and four or eight GPUs.
-
-Training uses official LIBERO states 0--49. Final evaluation must use
-`data/libero_state_banks/opsd_step500_unseen_v1/validation_manifest.json` together with its
-`training_reference_manifest.json`. The bank contains 50 independently seeded states per task,
-was generated from base seed 104729, and has zero training/validation state-hash or generation-seed
-overlap. Do not use it for tuning.
-
-RF-OPSD v1 is world-representation learning, not action correction. The world LoRA is disabled
-while `infer_action` generates the rollout, so the released Fast-WAM remains the collection policy.
-The 32-step shadow outcome is recorded as a `realized_counterfactual_student_action_chunk`; it is
-not the main 10-step replanning trajectory. A later recovery module must explicitly transform
-causal past residuals into a fault condition before it may affect actions.
-
 ## Extension switches and baseline protection
 
 The following policy is mandatory:
@@ -563,7 +514,6 @@ The following policy is mandatory:
 | `EVALUATION.opsd_adapter.enabled` | `false` | Inject and load an OPSD LoRA adapter after the base Fast-WAM checkpoint | No modules are injected and base evaluation is unchanged when false |
 | `EVALUATION.fault_detection.enabled` | `false` | Collect time-aligned Video DiT/VAE latent metrics during LIBERO evaluation | No joint video inference, latent encoding, or metric files are produced when false |
 | `return_video_latents` / `decode_video` in `FastWAM.infer_joint` | `false` / `true` | Expose final video latents and optionally avoid decoding for fault metrics | Original `video`/`action` result and decoding are unchanged at defaults |
-| `rf_opsd.enabled` (RF-OPSD entrypoint only) | `false` outside its dedicated config | Train a video-only world LoRA from realized Fault futures | The baseline evaluator and Fast-WAM sources are unchanged; the adapter is disabled during rollout action generation |
 
 ## Development checks
 
