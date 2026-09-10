@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import inspect
+import json
+import tempfile
 import unittest
+from pathlib import Path
 
 import torch
 import torch.nn as nn
@@ -19,6 +22,8 @@ from resilient.outcome_fpo.collector import (
 from resilient.outcome_fpo.objective import compute_fpo_ratio, fpo_clipped_objective
 from resilient.outcome_fpo.outcome import OutcomeTarget, outcome_cosine_reward
 from resilient.outcome_fpo.policy import sample_action_chunk, sample_cfm_pairs
+from resilient.outcome_fpo.runtime import _resolve_resume
+from resilient.outcome_fpo.trainer import OutcomeFPOTrainer
 from resilient.outcome_fpo.types import ActionConditioning, CandidateSample, OutcomeGroup
 
 
@@ -127,6 +132,58 @@ class CollectionTests(unittest.TestCase):
         source = inspect.getsource(sample_action_chunk)
         self.assertIn("return_denoising_trace=False", source)
         self.assertNotIn("sde", source.lower())
+
+
+class CheckpointTests(unittest.TestCase):
+    def test_retention_prunes_only_rolling_states(self) -> None:
+        class _Accelerator:
+            is_main_process = True
+
+            @staticmethod
+            def wait_for_everyone() -> None:
+                return None
+
+        trainer = OutcomeFPOTrainer.__new__(OutcomeFPOTrainer)
+        trainer.accelerator = _Accelerator()
+        with tempfile.TemporaryDirectory() as directory:
+            output_dir = Path(directory)
+            state_root = output_dir / "checkpoints" / "state"
+            epoch_root = output_dir / "checkpoints" / "epochs"
+            for step in (100, 200, 300, 400):
+                (state_root / f"step_{step:08d}").mkdir(parents=True)
+            epoch_checkpoint = epoch_root / "epoch_0001_step_00000500"
+            epoch_checkpoint.mkdir(parents=True)
+
+            trainer.prune_checkpoints(output_dir, keep=3)
+
+            self.assertEqual(
+                sorted(path.name for path in state_root.iterdir()),
+                ["step_00000200", "step_00000300", "step_00000400"],
+            )
+            self.assertTrue(epoch_checkpoint.is_dir())
+
+    def test_auto_resume_considers_epoch_and_rolling_checkpoints(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output_dir = Path(directory)
+            rolling = output_dir / "checkpoints" / "state" / "step_00000400"
+            epoch = output_dir / "checkpoints" / "epochs" / "epoch_0001_step_00000500"
+            for path, group_index, epoch_index, step in (
+                (rolling, 1600, 0, 400),
+                (epoch, 2000, 1, 500),
+            ):
+                path.mkdir(parents=True)
+                (path / "trainer_state.json").write_text(
+                    json.dumps(
+                        {
+                            "group_index": group_index,
+                            "epoch": epoch_index,
+                            "global_step": step,
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+            self.assertEqual(_resolve_resume(output_dir, "auto"), epoch)
 
 
 class _ToyVideoExpert(nn.Module):

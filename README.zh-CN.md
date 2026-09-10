@@ -547,12 +547,14 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
   output_dir=runs/outcome_fpo/joint1_half_seed42_8gpu
 ```
 
-默认每次全局采集 8 个 group：4 卡时每 rank 2 个，8 卡时每 rank 1 个。checkpoint 只在完整采集
-边界写入 `<output_dir>/checkpoints/state/step_XXXXXXXX/`，其中包含 Accelerate/ZeRO optimizer 与
-RNG 状态、`recovery_adapter.pt`、`trainer_state.json`；解析后的配置与 provenance 位于 run 根
-目录。使用同一显式输出目录加 `resume=auto` 恢复，或直接指定某个 state 目录；解析配置哈希不
-一致会立即拒绝恢复。`rollouts_rank_XX.jsonl` 记录状态、seed、4 个 reward 以及仅供诊断的成功
-标志，成功标志不会参与 reward。
+默认每次全局采集 8 个 group：4 卡时每 rank 2 个，8 卡时每 rank 1 个。中间 checkpoint 只在
+完整采集边界写入 `<output_dir>/checkpoints/state/step_XXXXXXXX/`，默认滚动保留最近 3 次。每个
+完整 epoch 另存到 `<output_dir>/checkpoints/epochs/epoch_XXXX_step_XXXXXXXX/`，且不受中间状态
+滚动清理影响。两类 checkpoint 均包含 Accelerate/ZeRO optimizer 与 RNG 状态、
+`recovery_adapter.pt`、`trainer_state.json`；解析后的配置与 provenance 位于 run 根目录。
+`resume=auto` 会在两类目录中选择进度最靠后的完整 checkpoint，也可显式指定任意一种目录；解析
+配置哈希不一致会立即拒绝恢复。`rollouts_rank_XX.jsonl` 记录状态、seed、4 个 reward 以及仅供
+诊断的成功标志，成功标志不会参与 reward。
 
 训练完成后，使用现有通用 Fast-WAM LoRA loader 和未见状态库评测 Recovery LoRA。参数仍保留
 历史 `opsd` 名称，但能加载结构完全相同的本 adapter：
@@ -562,7 +564,7 @@ python scripts/resilient/evaluate_fault.py \
   --fault-config configs/fault/structure/panda_joint1_half_motion.yaml \
   --gpus 0,1,2,3 \
   --checkpoint checkpoints/fastwam_release/libero_uncond_2cam224.pt \
-  --opsd-adapter runs/outcome_fpo/joint1_half_seed42/checkpoints/state/step_XXXXXXXX/recovery_adapter.pt \
+  --opsd-adapter runs/outcome_fpo/joint1_half_seed42/checkpoints/epochs/epoch_0001_step_XXXXXXXX/recovery_adapter.pt \
   --opsd-config runs/outcome_fpo/joint1_half_seed42/resolved_config.yaml \
   --state-bank-manifest data/libero_state_banks/opsd_step500_unseen_v1/validation_manifest.json \
   --training-state-manifest data/libero_state_banks/opsd_step500_unseen_v1/training_reference_manifest.json \

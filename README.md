@@ -587,12 +587,16 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
 ```
 
 The default global collection contains eight groups: two groups per rank on four GPUs or one group
-per rank on eight GPUs. Checkpoints are written only after a complete collection under
-`<output_dir>/checkpoints/state/step_XXXXXXXX/` and include Accelerate/ZeRO optimizer and RNG state,
-`recovery_adapter.pt`, `trainer_state.json`, and the resolved configuration/provenance in the run
-root. Resume with `resume=auto` and the identical explicit output directory, or provide one state
-directory. A resolved-config hash mismatch fails closed. `rollouts_rank_XX.jsonl` records state,
-seed, four rewards, and diagnostic success flags; the success flags are not part of the reward.
+per rank on eight GPUs. Intermediate checkpoints are written only after a complete collection under
+`<output_dir>/checkpoints/state/step_XXXXXXXX/`; this rolling set retains the newest three states by
+default. Every completed epoch is saved separately under
+`<output_dir>/checkpoints/epochs/epoch_XXXX_step_XXXXXXXX/` and is never removed by rolling
+retention. Both checkpoint types contain Accelerate/ZeRO optimizer and RNG state,
+`recovery_adapter.pt`, and `trainer_state.json`; resolved configuration/provenance remains in the run
+root. `resume=auto` selects the most advanced complete checkpoint across both locations. An explicit
+path may point to either type, and a resolved-config hash mismatch fails closed.
+`rollouts_rank_XX.jsonl` records state, seed, four rewards, and diagnostic success flags; the success
+flags are not part of the reward.
 
 Evaluate a completed Recovery LoRA with the existing generic Fast-WAM LoRA loader and the unseen
 state bank. The option retains its historical `opsd` name but accepts this identical adapter
@@ -603,7 +607,7 @@ python scripts/resilient/evaluate_fault.py \
   --fault-config configs/fault/structure/panda_joint1_half_motion.yaml \
   --gpus 0,1,2,3 \
   --checkpoint checkpoints/fastwam_release/libero_uncond_2cam224.pt \
-  --opsd-adapter runs/outcome_fpo/joint1_half_seed42/checkpoints/state/step_XXXXXXXX/recovery_adapter.pt \
+  --opsd-adapter runs/outcome_fpo/joint1_half_seed42/checkpoints/epochs/epoch_0001_step_XXXXXXXX/recovery_adapter.pt \
   --opsd-config runs/outcome_fpo/joint1_half_seed42/resolved_config.yaml \
   --state-bank-manifest data/libero_state_banks/opsd_step500_unseen_v1/validation_manifest.json \
   --training-state-manifest data/libero_state_banks/opsd_step500_unseen_v1/training_reference_manifest.json \

@@ -150,9 +150,22 @@ class OutcomeFPOTrainer:
         *,
         config_hash: str,
         fault_state: dict[str, Any],
+        epoch_number: int | None = None,
     ) -> Path:
-        """Save only at a fully consumed on-policy buffer boundary."""
-        state_dir = output_dir / "checkpoints" / "state" / f"step_{self.global_step:08d}"
+        """Save a rolling state or a permanent epoch-boundary state."""
+        if epoch_number is None:
+            state_dir = output_dir / "checkpoints" / "state" / f"step_{self.global_step:08d}"
+            checkpoint_boundary = "completed_on_policy_collection"
+        else:
+            if epoch_number <= 0:
+                raise ValueError("Epoch checkpoint number must be positive.")
+            state_dir = (
+                output_dir
+                / "checkpoints"
+                / "epochs"
+                / f"epoch_{epoch_number:04d}_step_{self.global_step:08d}"
+            )
+            checkpoint_boundary = "completed_epoch"
         if self.accelerator.is_main_process:
             state_dir.mkdir(parents=True, exist_ok=True)
         self.accelerator.wait_for_everyone()
@@ -166,7 +179,8 @@ class OutcomeFPOTrainer:
                 "epoch": self.epoch,
                 "group_index": self.group_index,
                 "fault_state": fault_state,
-                "checkpoint_boundary": "completed_on_policy_collection",
+                "checkpoint_boundary": checkpoint_boundary,
+                "schedule_epoch": epoch_number,
             }
             (state_dir / "trainer_state.json").write_text(
                 json.dumps(payload, indent=2) + "\n", encoding="utf-8"
@@ -189,7 +203,7 @@ class OutcomeFPOTrainer:
         self.group_index = int(payload["group_index"])
 
     def prune_checkpoints(self, output_dir: Path, *, keep: int) -> None:
-        """Keep the newest completed state directories."""
+        """Keep the newest rolling states without deleting epoch checkpoints."""
         if keep <= 0:
             raise ValueError("Checkpoint retention must be positive.")
         self.accelerator.wait_for_everyone()

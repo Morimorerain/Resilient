@@ -21,7 +21,8 @@ weight_decay: 0.0
 mixed_precision: bf16
 max_grad_norm: 0.1
 save_every: 100
-max_checkpoints: 2
+# Rolling step states only; epoch-boundary checkpoints are retained separately.
+max_checkpoints: 3
 
 outcome_fpo:
   validate_only: false

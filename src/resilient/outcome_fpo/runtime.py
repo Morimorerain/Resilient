@@ -78,8 +78,28 @@ def _resolve_resume(output_dir: Path, resume: str | None) -> Path | None:
         return None
     if resume != "auto":
         return _resolve_project_path(str(resume))
-    candidates = sorted((output_dir / "checkpoints" / "state").glob("step_*"))
-    return candidates[-1] if candidates else None
+    checkpoint_root = output_dir / "checkpoints"
+    candidates = [
+        *(checkpoint_root / "state").glob("step_*"),
+        *(checkpoint_root / "epochs").glob("epoch_*_step_*"),
+    ]
+    completed: list[tuple[tuple[int, int, int], Path]] = []
+    for candidate in candidates:
+        state_path = candidate / "trainer_state.json"
+        if not state_path.is_file():
+            continue
+        payload = json.loads(state_path.read_text(encoding="utf-8"))
+        completed.append(
+            (
+                (
+                    int(payload.get("group_index", -1)),
+                    int(payload.get("epoch", -1)),
+                    int(payload.get("global_step", -1)),
+                ),
+                candidate,
+            )
+        )
+    return max(completed, key=lambda item: item[0])[1] if completed else None
 
 
 def validate_outcome_fpo_config(
@@ -581,6 +601,7 @@ def run_outcome_fpo_training(cfg: DictConfig) -> None:
             output_dir,
             config_hash=provenance["config_sha256"],
             fault_state={},
+            epoch_number=schedule_epoch + 1,
         )
         trainer.prune_checkpoints(output_dir, keep=int(cfg.max_checkpoints))
         logging.info(
