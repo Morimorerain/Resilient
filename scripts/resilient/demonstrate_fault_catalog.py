@@ -154,10 +154,14 @@ def _render_visual(
 def _build_actions(entry: dict[str, Any]) -> tuple[list[np.ndarray], list[str]]:
     actions: list[np.ndarray] = []
     phases: list[str] = []
+    action_dimension = int(entry.get("action_dimension", 7))
     for phase in entry.get("phases", []):
         action = np.asarray(phase["action"], dtype=np.float64)
-        if action.shape != (7,) or not np.all(np.isfinite(action)):
-            raise ValueError(f"Phase {phase.get('name')} must define a finite 7D action.")
+        if action.shape != (action_dimension,) or not np.all(np.isfinite(action)):
+            raise ValueError(
+                f"Phase {phase.get('name')} must define a finite "
+                f"{action_dimension}D action."
+            )
         steps = int(phase["steps"])
         if steps < 0:
             raise ValueError("Phase steps must be non-negative.")
@@ -198,20 +202,27 @@ def _run_trajectory(
         int(entry["resolution"]),
         int(entry["environment_seed"]),
         fault_pipeline=pipeline,
+        controller=str(entry.get("controller", "OSC_POSE")),
     )
     records: list[FrameRecord] = []
     try:
+        robot = env.env.robots[0]
+        if int(robot.action_dim) != len(actions[0]):
+            raise ValueError(
+                f"Controller {robot.controller.name} expects {robot.action_dim}D actions, "
+                f"but the catalog defines {len(actions[0])}D."
+            )
         env.reset()
         observation = env.set_init_state(initial_state)
         records.append(_capture_record(env, observation, entry))
         for action in actions:
             observation, _, _, _ = env.step(action)
             records.append(_capture_record(env, observation, entry))
-        robot = env.env.robots[0]
         return records, {
             "task_description": description,
             "controller": robot.controller.name,
             "control_frequency_hz": int(robot.control_freq),
+            "action_dimension": int(robot.action_dim),
             "joint_names": list(robot.robot_joints),
             "fault": pipeline.metadata(),
         }
@@ -235,6 +246,9 @@ def _render_embodiment(
     pipeline = build_fault_pipeline(fault_config)
     target_joint = pipeline.metadata()["faults"][0]["targets"][0]
     joint_index = fault_meta["joint_names"].index(target_joint)
+    other_joint_indices = [
+        index for index in range(len(fault_meta["joint_names"])) if index != joint_index
+    ]
     fps = int(entry["fps"])
     control_hz = int(clean_meta["control_frequency_hz"])
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -257,19 +271,42 @@ def _render_embodiment(
                 fault.joint_positions_rad[joint_index]
                 - initial_fault.joint_positions_rad[joint_index]
             )
+            clean_other_delta = np.rad2deg(
+                np.max(
+                    np.abs(
+                        clean.joint_positions_rad[other_joint_indices]
+                        - initial_clean.joint_positions_rad[other_joint_indices]
+                    )
+                )
+            )
+            fault_other_delta = np.rad2deg(
+                np.max(
+                    np.abs(
+                        fault.joint_positions_rad[other_joint_indices]
+                        - initial_fault.joint_positions_rad[other_joint_indices]
+                    )
+                )
+            )
             frame = compose_comparison_frame(
                 clean.image,
                 fault.image,
-                title=f"{entry['id']} | same initial state and OSC_POSE commands",
+                title=(
+                    f"{entry['id']} | same state | {clean_meta['controller']} "
+                    f"joint1-only commands"
+                ),
                 clean_label="NOMINAL SIMULATOR",
                 fault_label=f"FAULT SIMULATOR | {_fault_label(pipeline)}",
                 clean_telemetry={
                     "phase": phases[action_index],
+                    "arm command": "joint1 only",
                     f"{target_joint} delta (deg)": float(clean_delta),
+                    "other joints max delta (deg)": float(clean_other_delta),
                 },
                 fault_telemetry={
                     "phase": phases[action_index],
+                    "arm command": "joint1 only",
                     f"{target_joint} delta (deg)": float(fault_delta),
+                    "other joints max delta (deg)": float(fault_other_delta),
                     "EEF gap from nominal (mm)": float(eef_gap_mm),
                 },
                 timestamp_seconds=frame_index / control_hz,
@@ -295,12 +332,35 @@ def _render_embodiment(
         )
     )
     max_gap_frame = int(np.argmax(eef_gaps))
+    nominal_other_joint_motion = np.asarray(
+        [
+            np.max(
+                np.abs(
+                    record.joint_positions_rad[other_joint_indices]
+                    - initial_clean.joint_positions_rad[other_joint_indices]
+                )
+            )
+            for record in clean_records
+        ]
+    )
+    fault_other_joint_motion = np.asarray(
+        [
+            np.max(
+                np.abs(
+                    record.joint_positions_rad[other_joint_indices]
+                    - initial_fault.joint_positions_rad[other_joint_indices]
+                )
+            )
+            for record in fault_records
+        ]
+    )
     return {
         "kind": "embodiment",
         "artifact": video_path.name,
         "task_description": clean_meta["task_description"],
         "controller": clean_meta["controller"],
         "control_frequency_hz": control_hz,
+        "action_dimension": clean_meta["action_dimension"],
         "num_environment_steps": len(actions),
         "fault": fault_meta["fault"],
         "comparison": {
@@ -323,6 +383,12 @@ def _render_embodiment(
             "max_eef_gap_m": float(eef_gaps[max_gap_frame]),
             "max_eef_gap_time_s": float(max_gap_frame / control_hz),
             "max_joint_position_gap_deg": float(np.max(joint_gaps_deg)),
+            "max_nominal_other_joint_delta_deg": float(
+                np.rad2deg(np.max(nominal_other_joint_motion))
+            ),
+            "max_fault_other_joint_delta_deg": float(
+                np.rad2deg(np.max(fault_other_joint_motion))
+            ),
         },
     }
 

@@ -235,7 +235,7 @@ make demonstrations easy to inspect; change `severity` and the physical paramete
 | V1 Camera Rotation | `visual.camera_pose` | Mutates MuJoCo camera extrinsic quaternion | `visual/camera_rotation.yaml`: both cameras, local +Z 45 deg |
 | V2 Camera Translation | `visual.camera_pose` | Mutates MuJoCo camera extrinsic position | `visual/camera_translation.yaml`: both cameras, local +X 0.12 m |
 | V3 Defocus Blur | `visual.defocus_blur` | Gaussian optical degradation in the environment-owned camera sensor | `visual/defocus_blur.yaml`: sigma 8 px |
-| V4 Local Occlusion | `visual.local_occlusion` | Fixed lens mask in the environment-owned camera sensor | `visual/local_occlusion.yaml`: centered 60% x 60% mask |
+| V4 Local Occlusion | `visual.local_occlusion` | Soft-edged round ink spots in the environment-owned camera sensor | `visual/local_occlusion.yaml`: eight configured spots, largest diameter 0.44 image width |
 | V5 Illumination Change | `visual.illumination` | Affine RGB response before the observation leaves the environment | `visual/illumination_change.yaml`: gain 0.2 with color shift |
 | E1 Joint Motion Degradation | `structure.joint_motion` | Retains a fraction of realized per-step displacement/velocity | `structure/joint_motion_degradation.yaml`: joint 1 retention 0.2 |
 | E2 Joint Position Bias | `structure.joint_position_bias` | Introduces one fixed, non-cumulative joint zero offset per loaded state | `structure/joint_position_bias.yaml`: joint 1 +20 deg |
@@ -286,9 +286,10 @@ python scripts/resilient/demonstrate_fault_catalog.py \
 Pass catalog IDs after `--faults` to render a subset. Visual artifacts are
 `nominal_vs_fault.png`; embodiment artifacts are `nominal_vs_fault.mp4`. Each panel is labeled in
 its top-left corner. Embodiment panels start from the same simulator state, replay the same
-`OSC_POSE` commands, use the same frame count, and report target-joint and end-effector divergence.
-The motion phases are explicit in `configs/fault/demo_catalog.yaml`; reversal is included for
-backlash, and long joint-1-exciting motion is used for degradation, range loss, and periodic stick.
+`JOINT_POSITION` commands, use the same frame count, and report target-joint and end-effector
+divergence. Every embodiment action has only the failed joint-1 dimension nonzero; the other six
+arm-joint command dimensions remain zero. The motion phases are explicit in
+`configs/fault/demo_catalog.yaml`; reversal is included for backlash and periodic stick.
 An all-Fault run writes `catalog_manifest.json`; a subset uses
 `catalog_manifest__<selected-ids>.json`, so it cannot overwrite the full manifest. The default
 output root and its JSON summaries are generated artifacts and remain ignored by Git.
@@ -331,33 +332,16 @@ python scripts/resilient/evaluate_fault.py \
 the adapter checkpoint identifier, and the manifest records the base model, adapter, and config.
 Without these arguments, evaluation follows the unchanged Fast-WAM checkpoint path.
 
-### Joint-motion fault demonstration
+### Joint-motion fault semantics
 
 The `structure.joint_motion` family is installed by the environment when the MuJoCo simulator is
-created. It acts at the environment dynamics-step boundary, independently of `OSC_POSE`, Fast-WAM,
-OPSD, or any later controller. It accepts one or more MuJoCo joint names. The first built-in law is
+created. It acts at the environment dynamics-step boundary, independently of the controller,
+Fast-WAM, OPSD, or any later policy. It accepts one or more MuJoCo joint names. The first built-in law is
 `proportional`; the example retains 50% of `robot0_joint1` displacement and velocity produced by
 every environment control step. The degradation law has its own registry, so future deterministic
-non-linear functions do not require changes to the simulator runner or model code.
-
-Generate a time-aligned clean/fault `OSC_POSE` comparison with:
-
-```bash
-MUJOCO_GL=egl PYOPENGL_PLATFORM=egl PYTHONPATH=src:third_party/LIBERO:. \
-python scripts/resilient/demonstrate_joint_motion_fault.py \
-  --fault-config configs/fault/structure/panda_joint1_half_motion.yaml \
-  --suite libero_spatial \
-  --task-id 0 \
-  --initial-state-index 0
-```
-
-Both panels replay the same normalized `OSC_POSE` command sequence from the same simulator state.
-The default trajectory deliberately moves far in `-x/+y/+z` to exercise Panda joint 1. Each frame
-shows synchronized time, target-joint displacement, end-effector position, and clean/fault
-end-effector separation. The default ignored output is
-`evaluate_results/fault_demos/<fault-slug>/<suite_task_state>/`, containing
-`clean_vs_fault.mp4` and `summary.json`. Use `--render-camera`, `--osc-command`, phase-length, seed,
-resolution, FPS, and `--output-root` arguments to reproduce or change the visualization.
+non-linear functions do not require changes to the simulator runner or model code. The catalog
+demonstration command above supersedes the former OSC trajectory demo: it uses `JOINT_POSITION`
+with only joint 1 commanded, making the realized effect attributable to the selected Fault.
 
 The proportional law is defined at the environment dynamics-step boundary:
 

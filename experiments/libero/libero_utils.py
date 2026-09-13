@@ -1,14 +1,15 @@
 """Utils for evaluating policies in LIBERO simulation environments."""
 
 import math
-import time
 import pathlib
+import time
 
 import imageio
-from PIL import Image, ImageDraw
 import numpy as np
 from libero.libero import get_libero_path
 from libero.libero.envs import OffScreenRenderEnv, SubprocVectorEnv
+from PIL import Image, ImageDraw
+
 from fastwam.utils.video_io import save_mp4
 
 DATE = time.strftime("%Y_%m_%d")
@@ -24,8 +25,9 @@ def get_libero_env(
     *,
     fault_pipeline=None,
     fault_episode_index=0,
+    controller=None,
 ):
-    """Initializes and returns the LIBERO environment, along with the task description."""
+    """Initialize LIBERO with an optional controller override for diagnostics."""
     task_description = task.language
     task_bddl_file = (
         pathlib.Path(get_libero_path("bddl_files"))
@@ -37,6 +39,8 @@ def get_libero_env(
         "camera_heights": resolution,
         "camera_widths": resolution,
     }
+    if controller is not None:
+        env_args["controller"] = str(controller)
     if env_num > 1:
         env = SubprocVectorEnv([lambda: OffScreenRenderEnv(**env_args) for _ in range(env_num)])
     else:
@@ -79,10 +83,23 @@ def get_libero_image(obs):
         "wrist_image": wrist_img
     }
 
-def save_rollout_video(rollout_dir, rollout_images, idx, success, task_description, log_file=None, fps=24):
+def save_rollout_video(
+    rollout_dir,
+    rollout_images,
+    idx,
+    success,
+    task_description,
+    log_file=None,
+    fps=24,
+):
     """Saves an MP4 replay of an episode."""
-    processed_task_description = task_description.lower().replace(" ", "_").replace("\n", "_").replace(".", "_")[:50]
-    mp4_path = f"{rollout_dir}/{DATE_TIME}--episode={idx}--success={success}--task={processed_task_description}.mp4"
+    processed_task_description = (
+        task_description.lower().replace(" ", "_").replace("\n", "_").replace(".", "_")[:50]
+    )
+    mp4_path = (
+        f"{rollout_dir}/{DATE_TIME}--episode={idx}--success={success}"
+        f"--task={processed_task_description}.mp4"
+    )
     video_writer = imageio.get_writer(mp4_path, fps=fps)
     for img in rollout_images:
         if isinstance(img, dict):
@@ -117,7 +134,7 @@ def save_prediction_video(
     log_file=None,
     fps=8,
 ):
-    """Saves an MP4 comparison of ground-truth and predicted future frames for one replanning clip."""
+    """Save a predicted/realized future comparison for one replanning clip."""
     num_frames = min(len(gt_frames), len(pred_frames))
     if num_frames <= 0:
         raise ValueError("Cannot save prediction video with empty GT/pred frame lists.")
@@ -154,7 +171,9 @@ def save_prediction_video(
             Image.fromarray(np.concatenate([np.array(pred_pil), np.array(gt_pil)], axis=0))
         )
 
-    processed_task_description = task_description.lower().replace(" ", "_").replace("\n", "_").replace(".", "_")[:50]
+    processed_task_description = (
+        task_description.lower().replace(" ", "_").replace("\n", "_").replace(".", "_")[:50]
+    )
     try:
         replan_tag = f"{int(replan_idx):04d}"
     except (TypeError, ValueError):

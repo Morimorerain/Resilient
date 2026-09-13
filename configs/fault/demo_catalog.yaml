@@ -28,37 +28,47 @@ entries:
   - id: E1_joint_motion_degradation
     kind: embodiment
     fault_config: configs/fault/catalog/structure/joint_motion_degradation.yaml
+    controller: JOINT_POSITION
+    action_dimension: 8
     phases:
-      - {name: warmup, steps: 10, action: [0, 0, 0, 0, 0, 0, -1]}
-      - {name: excite_joint1, steps: 125, action: [-0.3, 0.4, 0.05, 0, 0, 0, -1]}
-      - {name: settle, steps: 15, action: [0, 0, 0, 0, 0, 0, -1]}
+      - {name: warmup, steps: 10, action: [0, 0, 0, 0, 0, 0, 0, -1]}
+      - {name: joint1_positive, steps: 85, action: [0.80, 0, 0, 0, 0, 0, 0, -1]}
+      - {name: settle, steps: 15, action: [0, 0, 0, 0, 0, 0, 0, -1]}
   - id: E2_joint_position_bias
     kind: embodiment
     fault_config: configs/fault/catalog/structure/joint_position_bias.yaml
+    controller: JOINT_POSITION
+    action_dimension: 8
     phases:
-      - {name: warmup, steps: 10, action: [0, 0, 0, 0, 0, 0, -1]}
-      - {name: excite_joint1, steps: 100, action: [-0.3, 0.4, 0.05, 0, 0, 0, -1]}
-      - {name: settle, steps: 20, action: [0, 0, 0, 0, 0, 0, -1]}
+      - {name: warmup, steps: 10, action: [0, 0, 0, 0, 0, 0, 0, -1]}
+      - {name: joint1_positive, steps: 60, action: [0.70, 0, 0, 0, 0, 0, 0, -1]}
+      - {name: settle, steps: 20, action: [0, 0, 0, 0, 0, 0, 0, -1]}
   - id: E3_joint_backlash
     kind: embodiment
     fault_config: configs/fault/catalog/structure/joint_backlash.yaml
+    controller: JOINT_POSITION
+    action_dimension: 8
     phases:
-      - {name: warmup, steps: 10, action: [0, 0, 0, 0, 0, 0, -1]}
-      - {name: forward, steps: 70, action: [-0.3, 0.4, 0.05, 0, 0, 0, -1]}
-      - {name: reverse, steps: 70, action: [0.3, -0.4, -0.05, 0, 0, 0, -1]}
-      - {name: settle, steps: 15, action: [0, 0, 0, 0, 0, 0, -1]}
+      - {name: warmup, steps: 10, action: [0, 0, 0, 0, 0, 0, 0, -1]}
+      - {name: joint1_positive, steps: 65, action: [0.80, 0, 0, 0, 0, 0, 0, -1]}
+      - {name: joint1_reverse, steps: 65, action: [-0.80, 0, 0, 0, 0, 0, 0, -1]}
+      - {name: settle, steps: 15, action: [0, 0, 0, 0, 0, 0, 0, -1]}
   - id: E4_joint_range_limitation
     kind: embodiment
     fault_config: configs/fault/catalog/structure/joint_range_limitation.yaml
+    controller: JOINT_POSITION
+    action_dimension: 8
     phases:
-      - {name: warmup, steps: 10, action: [0, 0, 0, 0, 0, 0, -1]}
-      - {name: drive_to_limit, steps: 140, action: [-0.3, 0.4, 0.05, 0, 0, 0, -1]}
-      - {name: settle, steps: 15, action: [0, 0, 0, 0, 0, 0, -1]}
+      - {name: warmup, steps: 10, action: [0, 0, 0, 0, 0, 0, 0, -1]}
+      - {name: joint1_to_limit, steps: 85, action: [0.90, 0, 0, 0, 0, 0, 0, -1]}
+      - {name: settle, steps: 15, action: [0, 0, 0, 0, 0, 0, 0, -1]}
   - id: E5_periodic_joint_freeze
     kind: embodiment
     fault_config: configs/fault/catalog/structure/periodic_joint_freeze.yaml
+    controller: JOINT_POSITION
+    action_dimension: 8
     phases:
-      - {name: warmup, steps: 10, action: [0, 0, 0, 0, 0, 0, -1]}
-      - {name: forward, steps: 95, action: [-0.3, 0.4, 0.05, 0, 0, 0, -1]}
-      - {name: reverse, steps: 95, action: [0.3, -0.4, -0.05, 0, 0, 0, -1]}
-      - {name: settle, steps: 15, action: [0, 0, 0, 0, 0, 0, -1]}
+      - {name: warmup, steps: 10, action: [0, 0, 0, 0, 0, 0, 0, -1]}
+      - {name: joint1_positive, steps: 70, action: [0.75, 0, 0, 0, 0, 0, 0, -1]}
+      - {name: joint1_reverse, steps: 70, action: [-0.75, 0, 0, 0, 0, 0, 0, -1]}
+      - {name: settle, steps: 15, action: [0, 0, 0, 0, 0, 0, 0, -1]}

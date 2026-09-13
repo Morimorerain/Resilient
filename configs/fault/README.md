@@ -29,13 +29,14 @@ fault keeps one severity record per component instead of inventing a dimensionle
 
 The ten severe, demonstration-oriented pipelines are under `catalog/`; they are normal pipeline
 files and can be passed directly to evaluation or training. `demo_catalog.yaml` only adds the
-task, initial state, render settings, and deterministic OSC action phases used to visualize them.
+task, initial state, render settings, controller, and deterministic action phases used to visualize
+them. Embodiment entries use `JOINT_POSITION` with only the target joint command nonzero.
 
 | Family | Required parameters | Exact environment semantics |
 | --- | --- | --- |
 | `visual.camera_pose` | one `target`; rotation operation or `position_offset` | Changes MuJoCo `cam_quat`/`cam_pos`; restored on suspend/detach |
 | `visual.defocus_blur` | `targets`; sigma severity in pixels | Gaussian blur at the environment camera-sensor boundary |
-| `visual.local_occlusion` | normalized `[x,y,w,h]` rectangle and RGB color | Replaces that fixed lens region; severity equals `w*h` |
+| `visual.local_occlusion` | normalized round `spots`, RGB color, feather radius | Composites reproducible soft-edged ink spots; severity is the largest spot diameter |
 | `visual.illumination` | optional 3x3 `color_matrix` and 3-vector `color_bias` | Computes `clip(I A^T + b, 0, 255)` before policy observation |
 | `structure.joint_motion` | `targets`; registered motion law | Replaces selected realized displacement and velocity after each MuJoCo step |
 | `structure.joint_position_bias` | `bias_deg` per target | Introduces a fixed offset once after a state load; it never accumulates per step |

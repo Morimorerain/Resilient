@@ -195,7 +195,12 @@ def _joint_state_config(family: str, severity: dict, parameters: dict) -> dict:
     }
 
 
-def _sensor_config(family: str, severity: dict, parameters=None) -> dict:
+def _sensor_config(
+    family: str,
+    severity: dict,
+    parameters=None,
+    operation_type: str = "test",
+) -> dict:
     return {
         "pipeline": {
             "id": f"{family}_test",
@@ -205,7 +210,7 @@ def _sensor_config(family: str, severity: dict, parameters=None) -> dict:
                     "id": "sensor",
                     "family": family,
                     "targets": ["agentview", "robot0_eye_in_hand"],
-                    "operation": {"type": "test"},
+                    "operation": {"type": operation_type},
                     "severity": severity,
                     "parameters": parameters or {},
                 }
@@ -432,15 +437,26 @@ class FaultPipelineTests(unittest.TestCase):
             "faulted_environment_camera_sensor",
         )
 
-    def test_local_occlusion_masks_configured_sensor_area(self) -> None:
+    def test_local_occlusion_renders_round_ink_spots(self) -> None:
         pipeline = build_fault_pipeline(
             _sensor_config(
                 "visual.local_occlusion",
-                {"name": "occluded_area", "value": 0.25, "unit": "ratio"},
-                {"rectangle": [0.25, 0.25, 0.5, 0.5], "color_rgb": [1, 2, 3]},
+                {
+                    "name": "largest_spot_diameter",
+                    "value": 0.5,
+                    "unit": "ratio",
+                },
+                {
+                    "spots": [
+                        {"center": [0.5, 0.5], "radius": 0.25, "opacity": 1.0}
+                    ],
+                    "color_rgb": [1, 2, 3],
+                    "feather_px": 0.0,
+                },
+                operation_type="ink_spots",
             )
         )
-        image = np.full((8, 8, 3), 255, dtype=np.uint8)
+        image = np.full((20, 20, 3), 255, dtype=np.uint8)
         transformed = pipeline.transform_observation(
             {
                 "agentview_image": image,
@@ -449,7 +465,8 @@ class FaultPipelineTests(unittest.TestCase):
             object(),
             pipeline.context(),
         )
-        np.testing.assert_array_equal(transformed["agentview_image"][3, 3], [1, 2, 3])
+        np.testing.assert_array_equal(transformed["agentview_image"][10, 10], [1, 2, 3])
+        np.testing.assert_array_equal(transformed["agentview_image"][5, 5], [255, 255, 255])
         np.testing.assert_array_equal(transformed["agentview_image"][0, 0], [255, 255, 255])
 
     def test_illumination_applies_affine_color_response(self) -> None:

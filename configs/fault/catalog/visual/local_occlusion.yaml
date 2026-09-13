@@ -7,8 +7,17 @@ pipeline:
       family: visual.local_occlusion
       enabled: true
       targets: [agentview, robot0_eye_in_hand]
-      operation: {type: fixed_rectangle}
-      severity: {name: occluded_area, value: 0.36, unit: ratio, level: severe}
+      operation: {type: ink_spots}
+      severity: {name: largest_spot_diameter, value: 0.44, unit: ratio, level: severe}
       parameters:
-        rectangle: [0.2, 0.2, 0.6, 0.6]
-        color_rgb: [20, 20, 20]
+        color_rgb: [4, 1, 7]
+        feather_px: 4.0
+        spots:
+          - {center: [0.46, 0.43], radius: 0.22, opacity: 0.98}
+          - {center: [0.67, 0.58], radius: 0.14, opacity: 0.96}
+          - {center: [0.30, 0.67], radius: 0.11, opacity: 0.94}
+          - {center: [0.73, 0.28], radius: 0.075, opacity: 0.90}
+          - {center: [0.21, 0.31], radius: 0.065, opacity: 0.88}
+          - {center: [0.82, 0.76], radius: 0.045, opacity: 0.82}
+          - {center: [0.16, 0.82], radius: 0.035, opacity: 0.78}
+          - {center: [0.87, 0.48], radius: 0.025, opacity: 0.72}

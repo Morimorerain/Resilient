@@ -232,7 +232,7 @@ Fault 定义是 `configs/fault/` 下与模型解耦的 YAML。创建环境时，
 | V1 相机旋转 | `visual.camera_pose` | 修改 MuJoCo 相机外参四元数 | `visual/camera_rotation.yaml`：双相机局部 +Z 45 度 |
 | V2 相机平移 | `visual.camera_pose` | 修改 MuJoCo 相机外参位置 | `visual/camera_translation.yaml`：双相机局部 +X 0.12 m |
 | V3 失焦模糊 | `visual.defocus_blur` | 在环境拥有的相机传感器中做 Gaussian 光学退化 | `visual/defocus_blur.yaml`：sigma 8 px |
-| V4 局部遮挡 | `visual.local_occlusion` | 在环境拥有的相机传感器中加入固定镜头 mask | `visual/local_occlusion.yaml`：中心 60%×60% 遮挡 |
+| V4 局部遮挡 | `visual.local_occlusion` | 在环境拥有的相机传感器中加入柔边墨汁圆斑 | `visual/local_occlusion.yaml`：8 个固定圆斑，最大直径为图宽 0.44 |
 | V5 光照变化 | `visual.illumination` | observation 离开环境前做仿射 RGB 响应 | `visual/illumination_change.yaml`：gain 0.2 并带颜色偏移 |
 | E1 关节运动退化 | `structure.joint_motion` | 按比例保留每个 dynamics step 的实际位移与速度 | `structure/joint_motion_degradation.yaml`：关节 1 保留 0.2 |
 | E2 关节位置偏置 | `structure.joint_position_bias` | 每次加载状态后引入一次固定且不累加的关节零点偏置 | `structure/joint_position_bias.yaml`：关节 1 +20 度 |
@@ -280,9 +280,10 @@ python scripts/resilient/demonstrate_fault_catalog.py \
 
 也可在 `--faults` 后只传需要生成的目录 ID。视觉产物名为 `nominal_vs_fault.png`，具身产物名为
 `nominal_vs_fault.mp4`，每个画面左上角都有说明。具身演示从同一 simulator state 出发、回放同一
-组 `OSC_POSE` 命令、帧数严格一致，并报告目标关节及末端执行器的偏差。运动阶段完整写在
-`configs/fault/demo_catalog.yaml`：回差演示包含反向，运动退化、范围限制和周期卡钝使用明显调动
-第一关节的长距离运动。全量运行写入 `catalog_manifest.json`；子集运行写入
+组 `JOINT_POSITION` 命令、帧数严格一致，并报告目标关节及末端执行器的偏差。所有具身演示
+action 只有失效 joint1 对应维度非零，其余六个机械臂关节命令保持为零。运动阶段完整写在
+`configs/fault/demo_catalog.yaml`，回差与周期卡钝演示包含反向。全量运行写入
+`catalog_manifest.json`；子集运行写入
 `catalog_manifest__<selected-ids>.json`，不会覆盖全量 manifest。默认输出目录和 JSON 摘要属于
 生成物，继续由 Git 忽略。
 
@@ -322,31 +323,15 @@ python scripts/resilient/evaluate_fault.py \
 标识，manifest 同时记录基座模型、adapter 和配置；不传这两个参数时仍走原 Fast-WAM 基线加载
 路径。
 
-### 关节运动退化 Fault 演示
+### 关节运动退化 Fault 语义
 
 `structure.joint_motion` family 在 MuJoCo simulator 创建时由环境安装，它作用在底层环境
-动力学 step 边界，与 `OSC_POSE`、Fast-WAM、OPSD 或后续任何控制器无关。`targets` 可同时指定
+动力学 step 边界，与具体 controller、Fast-WAM、OPSD 或后续任何策略无关。`targets` 可同时指定
 一个或多个 MuJoCo 关节名。首个内置实现为 `proportional`；已提供的配置会将每个
 环境控制步产生的 `robot0_joint1` 角位移和关节速度仅保留 50%。退化律有独立
-注册表，后续可增加确定性非线性函数，无需修改仿真调用器或模型代码。
-
-生成时间对齐的 clean/fault `OSC_POSE` 对比视频：
-
-```bash
-MUJOCO_GL=egl PYOPENGL_PLATFORM=egl PYTHONPATH=src:third_party/LIBERO:. \
-python scripts/resilient/demonstrate_joint_motion_fault.py \
-  --fault-config configs/fault/structure/panda_joint1_half_motion.yaml \
-  --suite libero_spatial \
-  --task-id 0 \
-  --initial-state-index 0
-```
-
-两个画面从同一 simulator state 出发，回放完全相同的归一化 `OSC_POSE` 命令序列。
-默认轨迹故意沿 `-x/+y/+z` 较远距离运动，以明显调动 Panda 第一关节。每帧标注同步
-时间、目标关节相对角度、末端位置及 clean/fault 末端距离。默认输出到被 Git 忽略的
-`evaluate_results/fault_demos/<fault-slug>/<suite_task_state>/`，包含 `clean_vs_fault.mp4` 和
-`summary.json`。可通过 `--render-camera`、`--osc-command`、各阶段步数、seed、分辨率、
-FPS 及 `--output-root` 调整演示。
+注册表，后续可增加确定性非线性函数，无需修改仿真调用器或模型代码。上面的目录演示命令
+已经取代旧的 OSC 轨迹演示；新版使用 `JOINT_POSITION` 且只命令关节 1，使观测差异可归因于
+所选 Fault，而不是其他关节共同运动。
 
 线性退化定义在每个环境动力学 step 边界：
 

@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from typing import Any
 
 import numpy as np
-from PIL import Image, ImageFilter
+from PIL import Image, ImageDraw, ImageFilter
 
 from ..base import FaultContext, FaultRuntime
 from ..types import SeveritySpec
@@ -170,33 +170,49 @@ class DefocusBlurFaultRuntime(ImageSensorFaultRuntime):
 
 
 class LocalOcclusionFaultRuntime(ImageSensorFaultRuntime):
-    """Overlay a fixed lens occlusion rectangle on selected camera sensors."""
+    """Overlay reproducible round ink spots on selected camera sensors."""
 
     family = "visual.local_occlusion"
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
+        if str(self.operation.get("type", "ink_spots")) != "ink_spots":
+            raise ValueError("Local occlusion currently supports operation.type=ink_spots.")
         if self.severity.unit not in {"ratio", "fraction"}:
-            raise ValueError("Local occlusion severity unit must be ratio or fraction.")
+            raise ValueError("Ink-spot diameter severity unit must be ratio or fraction.")
         if not 0.0 <= self.severity.value <= 1.0:
-            raise ValueError("Occlusion ratio must be in [0, 1].")
-        rectangle = self.parameters.get("rectangle", (0.25, 0.25, 0.5, 0.5))
-        self.rectangle = _finite_vector(rectangle, size=4, name="rectangle")
-        if np.any(self.rectangle < 0.0) or np.any(self.rectangle > 1.0):
-            raise ValueError("Normalized occlusion rectangle values must be in [0, 1].")
-        x, y, width, height = self.rectangle
-        if x + width > 1.0 or y + height > 1.0 or width <= 0.0 or height <= 0.0:
-            raise ValueError("Occlusion rectangle must fit inside the normalized image.")
+            raise ValueError("Largest ink-spot diameter must be in [0, 1].")
+        raw_spots = self.parameters.get("spots")
+        if not isinstance(raw_spots, Sequence) or not raw_spots:
+            raise ValueError("Ink-spot occlusion requires a non-empty spots list.")
+        spots: list[tuple[float, float, float, float]] = []
+        for index, raw_spot in enumerate(raw_spots):
+            if not isinstance(raw_spot, Mapping):
+                raise TypeError(f"Ink spot {index} must be a mapping.")
+            center = _finite_vector(raw_spot.get("center", ()), size=2, name="center")
+            radius = float(raw_spot.get("radius", 0.0))
+            opacity = float(raw_spot.get("opacity", 1.0))
+            if not math.isfinite(radius) or radius <= 0.0:
+                raise ValueError("Ink-spot radius must be positive and finite.")
+            if not 0.0 <= opacity <= 1.0:
+                raise ValueError("Ink-spot opacity must be in [0, 1].")
+            if np.any(center - radius < 0.0) or np.any(center + radius > 1.0):
+                raise ValueError("Every normalized ink spot must fit inside the image.")
+            spots.append((float(center[0]), float(center[1]), radius, opacity))
+        largest_diameter = max(2.0 * spot[2] for spot in spots)
+        if not math.isclose(largest_diameter, self.severity.value, rel_tol=0.01):
+            raise ValueError(
+                "Local-occlusion severity must equal the largest normalized spot diameter."
+            )
+        self.spots = tuple(spots)
         self.color = _finite_vector(
-            self.parameters.get("color_rgb", (24, 24, 24)), size=3, name="color_rgb"
+            self.parameters.get("color_rgb", (5, 2, 8)), size=3, name="color_rgb"
         )
         if np.any(self.color < 0.0) or np.any(self.color > 255.0):
             raise ValueError("Occlusion color must be in [0, 255].")
-        configured_area = float(width * height)
-        if not math.isclose(configured_area, self.severity.value, rel_tol=0.05, abs_tol=1e-6):
-            raise ValueError(
-                "Occlusion severity must equal the normalized rectangle area within 5%."
-            )
+        self.feather_px = float(self.parameters.get("feather_px", 3.0))
+        if not math.isfinite(self.feather_px) or self.feather_px < 0.0:
+            raise ValueError("feather_px must be finite and non-negative.")
 
     @classmethod
     def from_config(cls, config: Mapping[str, Any]) -> LocalOcclusionFaultRuntime:
@@ -205,15 +221,46 @@ class LocalOcclusionFaultRuntime(ImageSensorFaultRuntime):
     def apply_image(self, image: np.ndarray) -> np.ndarray:
         if image.ndim != 3 or image.shape[-1] != 3:
             raise ValueError(f"Camera image must have shape [H, W, 3], got {image.shape}.")
-        result = np.asarray(image).copy()
-        height, width = result.shape[:2]
-        x, y, rect_width, rect_height = self.rectangle
-        left = min(width - 1, int(round(float(x) * width)))
-        top = min(height - 1, int(round(float(y) * height)))
-        right = max(left + 1, min(width, int(round(float(x + rect_width) * width))))
-        bottom = max(top + 1, min(height, int(round(float(y + rect_height) * height))))
-        result[top:bottom, left:right] = self.color.astype(result.dtype)
-        return np.ascontiguousarray(result)
+        source = np.clip(image, 0, 255).astype(np.uint8, copy=False)
+        height, width = source.shape[:2]
+        mask = Image.new("L", (width, height), color=0)
+        draw = ImageDraw.Draw(mask)
+        scale = float(min(width, height))
+        for center_x, center_y, radius, opacity in self.spots:
+            radius_px = radius * scale
+            center_px = center_x * width
+            center_py = center_y * height
+            draw.ellipse(
+                (
+                    center_px - radius_px,
+                    center_py - radius_px,
+                    center_px + radius_px,
+                    center_py + radius_px,
+                ),
+                fill=int(round(255.0 * opacity)),
+            )
+        if self.feather_px:
+            mask = mask.filter(ImageFilter.GaussianBlur(self.feather_px))
+        alpha = np.asarray(mask, dtype=np.float32)[..., None] / 255.0
+        result = source.astype(np.float32) * (1.0 - alpha) + self.color * alpha
+        return np.ascontiguousarray(np.clip(result, 0.0, 255.0).astype(np.uint8))
+
+    def metadata(self) -> dict[str, Any]:
+        payload = super().metadata()
+        payload["parameters"] = {
+            "spots": [
+                {
+                    "center": [center_x, center_y],
+                    "radius": radius,
+                    "opacity": opacity,
+                }
+                for center_x, center_y, radius, opacity in self.spots
+            ],
+            "color_rgb": self.color.tolist(),
+            "feather_px": self.feather_px,
+        }
+        payload["semantics"] = "reproducible_round_ink_spots_on_camera_sensor"
+        return payload
 
 
 class IlluminationFaultRuntime(ImageSensorFaultRuntime):
