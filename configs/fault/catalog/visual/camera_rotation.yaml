@@ -1,0 +1,19 @@
+pipeline:
+  id: catalog_v1_camera_rotation_severe
+  enabled: true
+  seed: 42
+  faults:
+    - id: agentview_rotation
+      family: visual.camera_pose
+      enabled: true
+      target: agentview
+      operation: {type: local_axis_rotation, axis: z, direction: positive}
+      severity: {name: rotation_angle, value: 45.0, unit: degree, level: severe}
+      parameters: {position_offset: [0.0, 0.0, 0.0]}
+    - id: wrist_rotation
+      family: visual.camera_pose
+      enabled: true
+      target: robot0_eye_in_hand
+      operation: {type: local_axis_rotation, axis: z, direction: positive}
+      severity: {name: rotation_angle, value: 45.0, unit: degree, level: severe}
+      parameters: {position_offset: [0.0, 0.0, 0.0]}

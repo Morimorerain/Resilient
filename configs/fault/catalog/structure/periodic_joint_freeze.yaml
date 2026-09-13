@@ -1,0 +1,15 @@
+pipeline:
+  id: catalog_e5_periodic_joint_freeze_severe
+  enabled: true
+  seed: 42
+  faults:
+    - id: joint1_periodic_gear_stick
+      family: structure.periodic_joint_freeze
+      enabled: true
+      targets: [robot0_joint1]
+      operation: {type: angular_periodic_stick}
+      severity: {name: freeze_duration, value: 35, unit: control_steps, level: severe}
+      parameters:
+        period_deg: 10.0
+        phase_deg: 0.0
+        release_fraction: 0.25

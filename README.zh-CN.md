@@ -14,6 +14,8 @@ Resilient 是一个以可复现性为首要目标、基于 [FastWAM](https://git
 - 已在下方硬件上验证独立 Python/CUDA 环境、全部固定资产、LIBERO EGL 无界面 reset、单回合集成评测与完整 2,000 回合基准。
 - 带 severity 的 Fault 层和 OPSD-Flow 已完成 CPU、配置与仿真器烟测，尚未验证正式多卡 OPSD
   训练。
+- 核心的仿真器级 Fault 目录现已提供五类视觉 Fault、五类具身 Fault、可复用 YAML 配置及
+  时间对齐的图像/视频演示。
 - 面向仿真器级第一关节 50% 运动保留 Fault 的 Outcome-Guided FPO 已完成实现及 CPU/配置测试；
   尚未进行真实多卡优化烟测。
 
@@ -207,6 +209,10 @@ NUM_GPUS=8 bash reproduce/fastwam_libero/evaluate_full.sh
 
 ## 可复用 Fault 管线与评测
 
+> **项目核心接口：**所有 Fault 都在创建 LIBERO 仿真器时安装到 `FaultedEnvironment`。
+> Fast-WAM、FPO、OPSD 及后续任意策略只使用不变的环境 API，不包含具体 Fault 实现。因此同一
+> YAML 可以直接复用于评测、训练、shadow rollout 和多 Fault 联合实验。
+
 Fault 定义是 `configs/fault/` 下与模型解耦的 YAML。创建环境时，
 `get_libero_env(..., fault_pipeline=pipeline)` 会将启用的 pipeline 安装到透明的
 `FaultedEnvironment`。之后 reset、状态加载、observation、action、simulator step、临时
@@ -215,6 +221,70 @@ Fault 定义是 `configs/fault/` 下与模型解耦的 YAML。创建环境时，
 故障及多 Fault 顺序组合均可以插件形式加入，不需要在 Fast-WAM 或其他策略中增加故障
 分支。每个 Fault 都有稳定的 `family` 和独立的物理 `severity`（名称、数值、单位及可选
 等级），因此绕轴 10/20/30 度属于同一 Fault family 的三个 severity。
+
+### 十类 Fault 目录
+
+可直接调用的配置位于 `configs/fault/catalog/`。其中 severity 故意设得较重，以便肉眼检查演示；
+正式实验可修改 `severity` 及对应物理参数。
+
+| 编号 | Family | 底层作用方式 | 强故障演示配置 |
+| --- | --- | --- | --- |
+| V1 相机旋转 | `visual.camera_pose` | 修改 MuJoCo 相机外参四元数 | `visual/camera_rotation.yaml`：双相机局部 +Z 45 度 |
+| V2 相机平移 | `visual.camera_pose` | 修改 MuJoCo 相机外参位置 | `visual/camera_translation.yaml`：双相机局部 +X 0.12 m |
+| V3 失焦模糊 | `visual.defocus_blur` | 在环境拥有的相机传感器中做 Gaussian 光学退化 | `visual/defocus_blur.yaml`：sigma 8 px |
+| V4 局部遮挡 | `visual.local_occlusion` | 在环境拥有的相机传感器中加入固定镜头 mask | `visual/local_occlusion.yaml`：中心 60%×60% 遮挡 |
+| V5 光照变化 | `visual.illumination` | observation 离开环境前做仿射 RGB 响应 | `visual/illumination_change.yaml`：gain 0.2 并带颜色偏移 |
+| E1 关节运动退化 | `structure.joint_motion` | 按比例保留每个 dynamics step 的实际位移与速度 | `structure/joint_motion_degradation.yaml`：关节 1 保留 0.2 |
+| E2 关节位置偏置 | `structure.joint_position_bias` | 每次加载状态后引入一次固定且不累加的关节零点偏置 | `structure/joint_position_bias.yaml`：关节 1 +20 度 |
+| E3 关节回差 | `structure.joint_backlash` | 每次运动反向后先消耗空行程 | `structure/joint_backlash.yaml`：关节 1 间隙 12 度 |
+| E4 关节范围限制 | `structure.joint_range_limit` | 把实际关节位置裁剪到缩小后的绝对边界 | `structure/joint_range_limitation.yaml`：关节 1 限于 [-10,+10] 度 |
+| E5 周期性关节冻结 | `structure.periodic_joint_freeze` | 关节越过按角度周期分布的坏齿位置时冻结 | `structure/periodic_joint_freeze.yaml`：每 10 度触发并保持 35 个控制步 |
+
+V1/V2 修改 MuJoCo 渲染几何；V3--V5 模拟相机硬件/传感器输出，在任何模型预处理之前由
+`FaultedEnvironment` 执行；E1--E5 在每个环境 dynamics step 后修改 MuJoCo 实际关节状态。
+因此十类 Fault 均不位于模型、某个特定 controller 的 evaluator 或 recovery 算法中。
+E2/E3/E5 的有状态变量会写入 `fault_runtime_state_dict()`，相同状态的 shadow 环境能够精确复现。
+
+加载一个目录 Fault；需要联合 Fault 时，按期望顺序合并多个配置的 `faults` 项：
+
+```python
+from omegaconf import OmegaConf
+
+from experiments.libero.libero_utils import get_libero_env
+from resilient.faults import build_fault_pipeline
+
+fault_config = OmegaConf.to_container(
+    OmegaConf.load("configs/fault/catalog/structure/joint_backlash.yaml"),
+    resolve=True,
+)
+pipeline = build_fault_pipeline(fault_config)
+env, task_description = get_libero_env(task, 256, seed=42, fault_pipeline=pipeline)
+observation = env.reset()
+observation, reward, done, info = env.step(action)
+```
+
+在相应插件支持时，`targets` 可包含多个相机或标量 MuJoCo 关节名。每个插件都会校验单位和范围，
+并输出含 `family`、目标、物理 severity、参数和注入层的可移植 metadata。完整公式与扩展接口见
+`configs/fault/README.md`。
+
+一次生成五张带标注的 2×2 视觉对比图和五段时间对齐的具身对比视频：
+
+```bash
+CUDA_VISIBLE_DEVICES=0 EGL_DEVICE_ID=0 \
+MUJOCO_GL=egl PYOPENGL_PLATFORM=egl PYTHONPATH=src:third_party/LIBERO:. \
+python scripts/resilient/demonstrate_fault_catalog.py \
+  --catalog configs/fault/demo_catalog.yaml \
+  --faults all \
+  --output-root evaluate_results/fault_catalog
+```
+
+也可在 `--faults` 后只传需要生成的目录 ID。视觉产物名为 `nominal_vs_fault.png`，具身产物名为
+`nominal_vs_fault.mp4`，每个画面左上角都有说明。具身演示从同一 simulator state 出发、回放同一
+组 `OSC_POSE` 命令、帧数严格一致，并报告目标关节及末端执行器的偏差。运动阶段完整写在
+`configs/fault/demo_catalog.yaml`：回差演示包含反向，运动退化、范围限制和周期卡钝使用明显调动
+第一关节的长距离运动。全量运行写入 `catalog_manifest.json`；子集运行写入
+`catalog_manifest__<selected-ids>.json`，不会覆盖全量 manifest。默认输出目录和 JSON 摘要属于
+生成物，继续由 Git 忽略。
 
 已提交的相机示例为 `configs/fault/visual/wrist_camera_local_z.yaml`。用 4 卡评测默认的手腕相机
 绕局部 +Z 轴 30 度：

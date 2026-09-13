@@ -1,0 +1,17 @@
+pipeline:
+  id: catalog_v5_illumination_change_severe
+  enabled: true
+  seed: 42
+  faults:
+    - id: dual_camera_low_light
+      family: visual.illumination
+      enabled: true
+      targets: [agentview, robot0_eye_in_hand]
+      operation: {type: affine_color_response}
+      severity: {name: intensity_gain, value: 0.2, unit: ratio, level: severe}
+      parameters:
+        color_matrix:
+          - [0.20, 0.00, 0.00]
+          - [0.00, 0.16, 0.00]
+          - [0.00, 0.00, 0.12]
+        color_bias: [0.0, 0.0, 0.0]

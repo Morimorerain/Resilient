@@ -1,0 +1,14 @@
+pipeline:
+  id: catalog_v4_local_occlusion_severe
+  enabled: true
+  seed: 42
+  faults:
+    - id: dual_camera_occlusion
+      family: visual.local_occlusion
+      enabled: true
+      targets: [agentview, robot0_eye_in_hand]
+      operation: {type: fixed_rectangle}
+      severity: {name: occluded_area, value: 0.36, unit: ratio, level: severe}
+      parameters:
+        rectangle: [0.2, 0.2, 0.6, 0.6]
+        color_rgb: [20, 20, 20]

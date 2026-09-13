@@ -14,6 +14,8 @@ Resilient is a reproducibility-first research codebase built on [FastWAM](https:
 - The standalone Python/CUDA stack, all pinned assets, a headless LIBERO EGL reset, the one-episode integration evaluation, and the full 2,000-episode benchmark are validated on the hardware below.
 - The severity-aware Fault layer and OPSD-Flow implementation have reached CPU/configuration/
   simulator smoke validation; full multi-GPU OPSD training is not yet validated.
+- The core simulator-owned Fault catalog now provides five visual and five embodiment faults,
+  reusable YAML configurations, and aligned image/video demonstrations.
 - Outcome-Guided FPO for the simulator-owned joint-1 50% motion-retention Fault is implemented and
   covered by CPU/configuration tests; a real multi-GPU optimization smoke test is still pending.
 
@@ -207,6 +209,11 @@ On 2026-09-04, `libero_spatial` task 0 completed successfully in its single epis
 
 ## Reusable fault pipeline and evaluation
 
+> **Core project interface:** all Faults are installed in `FaultedEnvironment` when the LIBERO
+> simulator is created. Fast-WAM, FPO, OPSD, and any later policy use the unchanged environment
+> API and contain no Fault-specific implementation. The same YAML can therefore be reused for
+> evaluation, training, shadow rollouts, or compound-Fault experiments.
+
 Fault definitions are model-independent YAML files under `configs/fault/`. At environment
 construction, `get_libero_env(..., fault_pipeline=pipeline)` installs an enabled pipeline into a
 transparent `FaultedEnvironment`. The environment then owns reset, state-load, observation,
@@ -217,6 +224,74 @@ and ordered compound faults without adding fault-specific branches to Fast-WAM o
 Every fault has a stable `family` and a separate physical `severity` (`name`, numeric `value`,
 `unit`, and an optional categorical `level`), so +10/+20/+30 degree rotations are three severities
 of the same fault family.
+
+### Ten-Fault catalog
+
+The ready-to-run catalog lives under `configs/fault/catalog/`. Its severe settings intentionally
+make demonstrations easy to inspect; change `severity` and the physical parameters for experiments.
+
+| ID | Family | Bottom-layer behavior | Severe demonstration config |
+| --- | --- | --- | --- |
+| V1 Camera Rotation | `visual.camera_pose` | Mutates MuJoCo camera extrinsic quaternion | `visual/camera_rotation.yaml`: both cameras, local +Z 45 deg |
+| V2 Camera Translation | `visual.camera_pose` | Mutates MuJoCo camera extrinsic position | `visual/camera_translation.yaml`: both cameras, local +X 0.12 m |
+| V3 Defocus Blur | `visual.defocus_blur` | Gaussian optical degradation in the environment-owned camera sensor | `visual/defocus_blur.yaml`: sigma 8 px |
+| V4 Local Occlusion | `visual.local_occlusion` | Fixed lens mask in the environment-owned camera sensor | `visual/local_occlusion.yaml`: centered 60% x 60% mask |
+| V5 Illumination Change | `visual.illumination` | Affine RGB response before the observation leaves the environment | `visual/illumination_change.yaml`: gain 0.2 with color shift |
+| E1 Joint Motion Degradation | `structure.joint_motion` | Retains a fraction of realized per-step displacement/velocity | `structure/joint_motion_degradation.yaml`: joint 1 retention 0.2 |
+| E2 Joint Position Bias | `structure.joint_position_bias` | Introduces one fixed, non-cumulative joint zero offset per loaded state | `structure/joint_position_bias.yaml`: joint 1 +20 deg |
+| E3 Joint Backlash | `structure.joint_backlash` | Consumes joint travel after each direction reversal | `structure/joint_backlash.yaml`: joint 1 gap 12 deg |
+| E4 Joint Range Limitation | `structure.joint_range_limit` | Clips realized joint position to reduced absolute bounds | `structure/joint_range_limitation.yaml`: joint 1 in [-10, +10] deg |
+| E5 Periodic Joint Freeze | `structure.periodic_joint_freeze` | Freezes when the joint crosses angularly periodic defective-gear positions | `structure/periodic_joint_freeze.yaml`: every 10 deg, hold 35 control steps |
+
+V1/V2 alter MuJoCo rendering geometry. V3--V5 model camera hardware/sensor output and are applied
+inside `FaultedEnvironment`, before any model preprocessing. E1--E5 modify realized MuJoCo joint
+state after every environment dynamics step. Thus none of the ten Faults is implemented in a model,
+controller-specific evaluator, or recovery algorithm. Stateful E2/E3/E5 internals are included in
+`fault_runtime_state_dict()`, so same-state shadow environments can reproduce them exactly.
+
+Load one catalog Fault, or compose several by concatenating their `faults` entries:
+
+```python
+from omegaconf import OmegaConf
+
+from experiments.libero.libero_utils import get_libero_env
+from resilient.faults import build_fault_pipeline
+
+fault_config = OmegaConf.to_container(
+    OmegaConf.load("configs/fault/catalog/structure/joint_backlash.yaml"),
+    resolve=True,
+)
+pipeline = build_fault_pipeline(fault_config)
+env, task_description = get_libero_env(task, 256, seed=42, fault_pipeline=pipeline)
+observation = env.reset()
+observation, reward, done, info = env.step(action)
+```
+
+`targets` accepts multiple camera or scalar MuJoCo joint names where documented. Every plugin
+validates units and ranges and reports portable metadata including `family`, targets, physical
+severity, parameters, and injection layer. See `configs/fault/README.md` for exact formulas and
+extension points.
+
+Generate all five annotated 2 x 2 visual comparisons and five time-aligned embodiment videos:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 EGL_DEVICE_ID=0 \
+MUJOCO_GL=egl PYOPENGL_PLATFORM=egl PYTHONPATH=src:third_party/LIBERO:. \
+python scripts/resilient/demonstrate_fault_catalog.py \
+  --catalog configs/fault/demo_catalog.yaml \
+  --faults all \
+  --output-root evaluate_results/fault_catalog
+```
+
+Pass catalog IDs after `--faults` to render a subset. Visual artifacts are
+`nominal_vs_fault.png`; embodiment artifacts are `nominal_vs_fault.mp4`. Each panel is labeled in
+its top-left corner. Embodiment panels start from the same simulator state, replay the same
+`OSC_POSE` commands, use the same frame count, and report target-joint and end-effector divergence.
+The motion phases are explicit in `configs/fault/demo_catalog.yaml`; reversal is included for
+backlash, and long joint-1-exciting motion is used for degradation, range loss, and periodic stick.
+An all-Fault run writes `catalog_manifest.json`; a subset uses
+`catalog_manifest__<selected-ids>.json`, so it cannot overwrite the full manifest. The default
+output root and its JSON summaries are generated artifacts and remain ignored by Git.
 
 The committed camera example is `configs/fault/visual/wrist_camera_local_z.yaml`. Evaluate its
 default +30 degree severity on four GPUs with:

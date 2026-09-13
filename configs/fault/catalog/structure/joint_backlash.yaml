@@ -1,0 +1,14 @@
+pipeline:
+  id: catalog_e3_joint_backlash_severe
+  enabled: true
+  seed: 42
+  faults:
+    - id: joint1_backlash
+      family: structure.joint_backlash
+      enabled: true
+      targets: [robot0_joint1]
+      operation: {type: reversal_dead_travel}
+      severity: {name: backlash_gap, value: 12.0, unit: degree, level: severe}
+      parameters:
+        gap_deg: 12.0
+        direction_epsilon_rad: 1.0e-7

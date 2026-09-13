@@ -1,0 +1,23 @@
+pipeline:
+  id: catalog_v2_camera_translation_severe
+  enabled: true
+  seed: 42
+  faults:
+    - id: agentview_translation
+      family: visual.camera_pose
+      enabled: true
+      target: agentview
+      operation: {type: pose_offset}
+      severity: {name: translation_norm, value: 0.12, unit: metre, level: severe}
+      parameters:
+        position_offset: [0.12, 0.0, 0.0]
+        rotation_offset_deg: [0.0, 0.0, 0.0]
+    - id: wrist_translation
+      family: visual.camera_pose
+      enabled: true
+      target: robot0_eye_in_hand
+      operation: {type: pose_offset}
+      severity: {name: translation_norm, value: 0.12, unit: metre, level: severe}
+      parameters:
+        position_offset: [0.12, 0.0, 0.0]
+        rotation_offset_deg: [0.0, 0.0, 0.0]

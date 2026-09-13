@@ -1,0 +1,11 @@
+pipeline:
+  id: catalog_v3_defocus_blur_severe
+  enabled: true
+  seed: 42
+  faults:
+    - id: dual_camera_defocus
+      family: visual.defocus_blur
+      enabled: true
+      targets: [agentview, robot0_eye_in_hand]
+      operation: {type: gaussian_blur}
+      severity: {name: gaussian_sigma, value: 8.0, unit: pixel, level: severe}

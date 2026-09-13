@@ -176,6 +176,44 @@ def _joint_motion_config(targets=None, retention: float = 0.5) -> dict:
     }
 
 
+def _joint_state_config(family: str, severity: dict, parameters: dict) -> dict:
+    return {
+        "pipeline": {
+            "id": f"{family}_test",
+            "seed": 13,
+            "faults": [
+                {
+                    "id": "joint_state",
+                    "family": family,
+                    "targets": ["robot0_joint1"],
+                    "operation": {"type": "test"},
+                    "severity": severity,
+                    "parameters": parameters,
+                }
+            ],
+        }
+    }
+
+
+def _sensor_config(family: str, severity: dict, parameters=None) -> dict:
+    return {
+        "pipeline": {
+            "id": f"{family}_test",
+            "seed": 17,
+            "faults": [
+                {
+                    "id": "sensor",
+                    "family": family,
+                    "targets": ["agentview", "robot0_eye_in_hand"],
+                    "operation": {"type": "test"},
+                    "severity": severity,
+                    "parameters": parameters or {},
+                }
+            ],
+        }
+    }
+
+
 class _ExtensionFault(FaultRuntime):
     family = "test.extension"
     fault_id = "extension"
@@ -236,6 +274,31 @@ class FaultPipelineTests(unittest.TestCase):
             {"visual.camera_pose"},
         )
         self.assertEqual(len({pipeline.slug() for pipeline in pipelines}), 3)
+
+    def test_submetre_camera_translation_slug_preserves_exact_severity(self) -> None:
+        config = {
+            "pipeline": {
+                "id": "translation",
+                "faults": [
+                    {
+                        "id": "translation",
+                        "family": "visual.camera_pose",
+                        "target": "agentview",
+                        "operation": {"type": "pose_offset"},
+                        "severity": {
+                            "name": "translation_norm",
+                            "value": 0.12,
+                            "unit": "metre",
+                        },
+                        "parameters": {
+                            "position_offset": [0.12, 0.0, 0.0],
+                            "rotation_offset_deg": [0.0, 0.0, 0.0],
+                        },
+                    }
+                ],
+            }
+        }
+        self.assertIn("p0p12metre", build_fault_pipeline(config).slug())
 
     def test_pipeline_accepts_future_observation_and_action_faults(self) -> None:
         pipeline = FaultPipeline("extension", 5, [_ExtensionFault()])
@@ -342,6 +405,164 @@ class FaultPipelineTests(unittest.TestCase):
     def test_joint_motion_fault_rejects_invalid_retention(self) -> None:
         with self.assertRaisesRegex(ValueError, "retention ratio"):
             build_fault_pipeline(_joint_motion_config(retention=1.5))
+
+    def test_defocus_blur_is_environment_owned_and_suspendable(self) -> None:
+        pipeline = build_fault_pipeline(
+            _sensor_config(
+                "visual.defocus_blur",
+                {"name": "gaussian_sigma", "value": 3.0, "unit": "pixel"},
+            )
+        )
+        image = np.zeros((15, 15, 3), dtype=np.uint8)
+        image[7, 7] = 255
+        observation = {
+            "agentview_image": image.copy(),
+            "robot0_eye_in_hand_image": image.copy(),
+        }
+        transformed = pipeline.transform_observation(
+            observation, object(), pipeline.context()
+        )
+        self.assertLess(int(transformed["agentview_image"][7, 7, 0]), 255)
+        self.assertGreater(int(transformed["agentview_image"][6, 7, 0]), 0)
+        with pipeline.suspend(object(), context=pipeline.context()):
+            clean = pipeline.transform_observation(observation, object(), pipeline.context())
+        np.testing.assert_array_equal(clean["agentview_image"], image)
+        self.assertEqual(
+            pipeline.metadata()["faults"][0]["injection_layer"],
+            "faulted_environment_camera_sensor",
+        )
+
+    def test_local_occlusion_masks_configured_sensor_area(self) -> None:
+        pipeline = build_fault_pipeline(
+            _sensor_config(
+                "visual.local_occlusion",
+                {"name": "occluded_area", "value": 0.25, "unit": "ratio"},
+                {"rectangle": [0.25, 0.25, 0.5, 0.5], "color_rgb": [1, 2, 3]},
+            )
+        )
+        image = np.full((8, 8, 3), 255, dtype=np.uint8)
+        transformed = pipeline.transform_observation(
+            {
+                "agentview_image": image,
+                "robot0_eye_in_hand_image": image,
+            },
+            object(),
+            pipeline.context(),
+        )
+        np.testing.assert_array_equal(transformed["agentview_image"][3, 3], [1, 2, 3])
+        np.testing.assert_array_equal(transformed["agentview_image"][0, 0], [255, 255, 255])
+
+    def test_illumination_applies_affine_color_response(self) -> None:
+        pipeline = build_fault_pipeline(
+            _sensor_config(
+                "visual.illumination",
+                {"name": "intensity_gain", "value": 0.5, "unit": "ratio"},
+                {"color_bias": [1, 2, 3]},
+            )
+        )
+        image = np.full((2, 2, 3), 100, dtype=np.uint8)
+        transformed = pipeline.transform_observation(
+            {
+                "agentview_image": image,
+                "robot0_eye_in_hand_image": image,
+            },
+            object(),
+            pipeline.context(),
+        )
+        np.testing.assert_array_equal(transformed["agentview_image"][0, 0], [51, 52, 53])
+
+    def test_joint_position_bias_is_fixed_and_non_cumulative(self) -> None:
+        config = _joint_state_config(
+            "structure.joint_position_bias",
+            {"name": "absolute_bias", "value": 10.0, "unit": "degree"},
+            {"bias_deg": 10.0},
+        )
+        env = install_fault_pipeline(_FakeJointEnvironment(), build_fault_pipeline(config))
+        env.reset()
+        env.step(np.zeros(7))
+        first = float(env.sim.data.qpos[0])
+        env.step(np.zeros(7))
+        second = float(env.sim.data.qpos[0])
+        self.assertAlmostEqual(first, 0.8 + math.radians(10.0))
+        self.assertAlmostEqual(second, first + 0.8)
+        env.close()
+
+    def test_joint_backlash_consumes_dead_travel_after_reversal(self) -> None:
+        config = _joint_state_config(
+            "structure.joint_backlash",
+            {"name": "backlash_gap", "value": 20.0, "unit": "degree"},
+            {"gap_deg": 20.0},
+        )
+        env = install_fault_pipeline(_FakeJointEnvironment(), build_fault_pipeline(config))
+        env.reset()
+        env.step(np.zeros(7))
+        env.sim.step_displacement[0] = -0.2
+        env.sim.step_velocity[0] = -0.3
+        env.step(np.zeros(7))
+        self.assertAlmostEqual(float(env.sim.data.qpos[0]), 0.8)
+        self.assertEqual(float(env.sim.data.qvel[0]), 0.0)
+        env.step(np.zeros(7))
+        self.assertLess(float(env.sim.data.qpos[0]), 0.8)
+        env.close()
+
+    def test_joint_range_limit_clamps_realized_state(self) -> None:
+        config = _joint_state_config(
+            "structure.joint_range_limit",
+            {"name": "available_range_width", "value": 20.0, "unit": "degree"},
+            {"lower_deg": -10.0, "upper_deg": 10.0},
+        )
+        env = install_fault_pipeline(_FakeJointEnvironment(), build_fault_pipeline(config))
+        env.reset()
+        env.step(np.zeros(7))
+        self.assertAlmostEqual(float(env.sim.data.qpos[0]), math.radians(10.0))
+        self.assertEqual(float(env.sim.data.qvel[0]), 0.0)
+        env.close()
+
+    def test_periodic_freeze_is_triggered_by_joint_angle_crossing(self) -> None:
+        config = _joint_state_config(
+            "structure.periodic_joint_freeze",
+            {"name": "freeze_duration", "value": 3, "unit": "control_steps"},
+            {"period_deg": math.degrees(0.1), "phase_deg": math.degrees(0.1)},
+        )
+        env = install_fault_pipeline(_FakeJointEnvironment(), build_fault_pipeline(config))
+        env.reset()
+        env.sim.step_displacement[0] = 0.2
+        for _ in range(3):
+            env.step(np.zeros(7))
+            self.assertAlmostEqual(float(env.sim.data.qpos[0]), 0.0)
+        env.step(np.zeros(7))
+        self.assertAlmostEqual(float(env.sim.data.qpos[0]), 0.2)
+        runtime = env.fault_pipeline.faults[0]
+        self.assertEqual(
+            runtime.metadata()["semantics"],
+            "angular_position_triggered_periodic_gear_stick",
+        )
+        env.close()
+
+    def test_all_ten_catalog_configs_build(self) -> None:
+        config_root = Path(__file__).resolve().parents[1] / "configs" / "fault" / "catalog"
+        paths = sorted(config_root.rglob("*.yaml"))
+        expected = {
+            "visual/camera_rotation.yaml",
+            "visual/camera_translation.yaml",
+            "visual/defocus_blur.yaml",
+            "visual/local_occlusion.yaml",
+            "visual/illumination_change.yaml",
+            "structure/joint_motion_degradation.yaml",
+            "structure/joint_position_bias.yaml",
+            "structure/joint_backlash.yaml",
+            "structure/joint_range_limitation.yaml",
+            "structure/periodic_joint_freeze.yaml",
+        }
+        self.assertTrue(
+            expected.issubset({str(path.relative_to(config_root)) for path in paths})
+        )
+        from omegaconf import OmegaConf
+
+        for path in paths:
+            config = OmegaConf.to_container(OmegaConf.load(path), resolve=True)
+            pipeline = build_fault_pipeline(config)
+            self.assertTrue(pipeline.enabled, path.name)
 
     def test_fault_comparison_frame_preserves_aligned_panel_geometry(self) -> None:
         clean = np.zeros((8, 12, 3), dtype=np.uint8)

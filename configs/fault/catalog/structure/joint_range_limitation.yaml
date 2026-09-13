@@ -1,0 +1,14 @@
+pipeline:
+  id: catalog_e4_joint_range_limitation_severe
+  enabled: true
+  seed: 42
+  faults:
+    - id: joint1_reduced_range
+      family: structure.joint_range_limit
+      enabled: true
+      targets: [robot0_joint1]
+      operation: {type: absolute_clip}
+      severity: {name: available_range_width, value: 20.0, unit: degree, level: severe}
+      parameters:
+        lower_deg: -10.0
+        upper_deg: 10.0

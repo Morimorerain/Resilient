@@ -25,6 +25,7 @@ for import_root in (PROJECT_ROOT, SRC_ROOT):
         sys.path.insert(0, str(import_root))
 
 from resilient.faults import build_fault_pipeline  # noqa: E402
+from resilient.visualization import compose_visual_fault_grid  # noqa: E402
 
 DEFAULT_OUTPUT_DIR = Path("evaluate_results/faults")
 DEFAULT_SUITES = ("libero_spatial", "libero_object", "libero_goal", "libero_10")
@@ -201,21 +202,6 @@ def _write_or_validate_manifest(run_dir: Path, configuration: dict[str, Any]) ->
     return path
 
 
-def _annotated_panel(frame: Any, label: str) -> Any:
-    from PIL import Image, ImageDraw
-
-    panel = Image.fromarray(frame).convert("RGB")
-    draw = ImageDraw.Draw(panel)
-    box = draw.multiline_textbbox((0, 0), label, spacing=2)
-    padding = 4
-    draw.rectangle(
-        (0, 0, box[2] - box[0] + 2 * padding, box[3] - box[1] + 2 * padding),
-        fill=(0, 0, 0),
-    )
-    draw.multiline_text((padding, padding), label, fill=(255, 255, 255), spacing=2)
-    return panel
-
-
 def render_comparison_image(
     *,
     output_path: Path,
@@ -285,20 +271,18 @@ def render_comparison_image(
     finally:
         faulted_env.close()
 
-    label = json.dumps(pipeline.metadata()["faults"], ensure_ascii=True, separators=(",", ":"))
+    label = json.dumps(
+        pipeline.metadata()["faults"], ensure_ascii=True, separators=(",", ":")
+    )
     if len(label) > 160:
         label = label[:157] + "..."
-    size = LIBERO_ENV_RESOLUTION
-    canvas = Image.new("RGB", (size * 2, size * 2), color=(0, 0, 0))
-    panels = (
-        _annotated_panel(nominal_images["image"], "Nominal / agentview"),
-        _annotated_panel(nominal_images["wrist_image"], "Nominal / wrist"),
-        _annotated_panel(faulted_images["image"], f"Fault / agentview\n{label}"),
-        _annotated_panel(faulted_images["wrist_image"], f"Fault / wrist\n{label}"),
+    comparison = compose_visual_fault_grid(
+        nominal_images,
+        faulted_images,
+        fault_label=label,
+        title=f"Fault evaluation preview | {suite_name} task {task_id}",
     )
-    for panel, position in zip(panels, ((0, 0), (size, 0), (0, size), (size, size)), strict=True):
-        canvas.paste(panel, position)
-    canvas.save(output_path)
+    Image.fromarray(comparison).save(output_path)
 
 
 def build_markdown_summary(summary: dict[str, Any], suites: Sequence[str]) -> str:

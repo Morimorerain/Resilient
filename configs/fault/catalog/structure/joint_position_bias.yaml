@@ -1,0 +1,12 @@
+pipeline:
+  id: catalog_e2_joint_position_bias_severe
+  enabled: true
+  seed: 42
+  faults:
+    - id: joint1_position_bias
+      family: structure.joint_position_bias
+      enabled: true
+      targets: [robot0_joint1]
+      operation: {type: fixed_zero_offset}
+      severity: {name: absolute_bias, value: 20.0, unit: degree, level: severe}
+      parameters: {bias_deg: 20.0}

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import textwrap
 from collections.abc import Mapping
 from typing import Any
 
@@ -87,7 +88,14 @@ def compose_comparison_frame(
         font=title_font,
     )
     draw.text((12, 38), clean_label, fill=(100, 235, 145), font=body_font)
-    draw.text((width + 12, 38), fault_label, fill=(255, 120, 110), font=body_font)
+    wrapped_fault_label = "\n".join(textwrap.wrap(fault_label, width=52))
+    draw.multiline_text(
+        (width + 12, 38),
+        wrapped_fault_label,
+        fill=(255, 120, 110),
+        font=small_font,
+        spacing=1,
+    )
     draw.line((width, 32, width, height + header_height), fill=(255, 255, 255), width=2)
 
     def add_overlay(x_offset: int, values: Mapping[str, Any]) -> None:

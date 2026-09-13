@@ -25,6 +25,56 @@ pipeline. `severity` is the resolved physical magnitude; configurations at 10, 2
 retain the same family/operation while producing different manifests and output slugs. A compound
 fault keeps one severity record per component instead of inventing a dimensionless global score.
 
+## Implemented catalog
+
+The ten severe, demonstration-oriented pipelines are under `catalog/`; they are normal pipeline
+files and can be passed directly to evaluation or training. `demo_catalog.yaml` only adds the
+task, initial state, render settings, and deterministic OSC action phases used to visualize them.
+
+| Family | Required parameters | Exact environment semantics |
+| --- | --- | --- |
+| `visual.camera_pose` | one `target`; rotation operation or `position_offset` | Changes MuJoCo `cam_quat`/`cam_pos`; restored on suspend/detach |
+| `visual.defocus_blur` | `targets`; sigma severity in pixels | Gaussian blur at the environment camera-sensor boundary |
+| `visual.local_occlusion` | normalized `[x,y,w,h]` rectangle and RGB color | Replaces that fixed lens region; severity equals `w*h` |
+| `visual.illumination` | optional 3x3 `color_matrix` and 3-vector `color_bias` | Computes `clip(I A^T + b, 0, 255)` before policy observation |
+| `structure.joint_motion` | `targets`; registered motion law | Replaces selected realized displacement and velocity after each MuJoCo step |
+| `structure.joint_position_bias` | `bias_deg` per target | Introduces a fixed offset once after a state load; it never accumulates per step |
+| `structure.joint_backlash` | `gap_deg` per target | On reversal, consumes displacement until the configured gap is exhausted |
+| `structure.joint_range_limit` | absolute `lower_deg`, `upper_deg` per target | Clips realized qpos and zeros velocity at a bound |
+| `structure.periodic_joint_freeze` | `period_deg`, `phase_deg`, `hold_steps` | Crossing `phase + k*period` holds qpos and zeros qvel |
+
+The position-bias implementation treats the loaded state as the command-coordinate reference,
+then introduces the configured physical zero offset on the first realized dynamics step. The
+offset is not added again on later steps, so it cannot drift linearly with episode length. A
+closed-loop controller may subsequently compensate for part of the physical error.
+
+Periodic freeze is angle-triggered, not time-triggered. Defective gear positions are
+
+```text
+q_bad(k) = phase_deg + k * period_deg,  k in integers
+```
+
+When one environment step crosses a previously untriggered `q_bad(k)`, the joint returns to its
+pre-step angle and its velocity becomes zero for `hold_steps`. It is then allowed to pass that
+tooth and rearms after moving `release_fraction * period_deg` beyond it. The same tooth can trigger
+again after the joint moves away and later reverses across it. This models periodic sticking at
+defective gear positions rather than a wall-clock on/off schedule.
+
+All stateful transmission variables (`initialized`, backlash direction/remaining gap, and periodic
+freeze countdown/tooth/direction) participate in `state_dict()` and `load_state_dict()`. Copy both
+the simulator state and `FaultedEnvironment.fault_runtime_state_dict()` when creating shadow
+rollouts.
+
+Generate the complete catalog demonstration with:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 EGL_DEVICE_ID=0 \
+MUJOCO_GL=egl PYOPENGL_PLATFORM=egl PYTHONPATH=src:third_party/LIBERO:. \
+python scripts/resilient/demonstrate_fault_catalog.py --faults all
+```
+
+The default output is `evaluate_results/fault_catalog/` and is intentionally ignored by Git.
+
 Implement a new plugin by subclassing `resilient.faults.FaultRuntime` and registering its factory
 with `register_fault`. Use only the hooks needed by that fault; hooks are invoked by the
 environment, not the policy:

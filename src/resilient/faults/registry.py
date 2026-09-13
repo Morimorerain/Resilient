@@ -27,13 +27,32 @@ def registered_faults() -> tuple[str, ...]:
 
 
 def _register_builtins() -> None:
+    from .structure.joint_backlash import JointBacklashFaultRuntime
     from .structure.joint_motion import JointMotionFaultRuntime
+    from .structure.joint_position_bias import JointPositionBiasFaultRuntime
+    from .structure.joint_range import JointRangeLimitFaultRuntime
+    from .structure.periodic_joint_freeze import PeriodicJointFreezeFaultRuntime
     from .visual.camera_pose import CameraPoseFaultRuntime
+    from .visual.image_sensor import (
+        DefocusBlurFaultRuntime,
+        IlluminationFaultRuntime,
+        LocalOcclusionFaultRuntime,
+    )
 
-    if CameraPoseFaultRuntime.family not in _REGISTRY:
-        register_fault(CameraPoseFaultRuntime.family, CameraPoseFaultRuntime.from_config)
-    if JointMotionFaultRuntime.family not in _REGISTRY:
-        register_fault(JointMotionFaultRuntime.family, JointMotionFaultRuntime.from_config)
+    builtins = (
+        CameraPoseFaultRuntime,
+        DefocusBlurFaultRuntime,
+        LocalOcclusionFaultRuntime,
+        IlluminationFaultRuntime,
+        JointMotionFaultRuntime,
+        JointPositionBiasFaultRuntime,
+        JointBacklashFaultRuntime,
+        JointRangeLimitFaultRuntime,
+        PeriodicJointFreezeFaultRuntime,
+    )
+    for runtime in builtins:
+        if runtime.family not in _REGISTRY:
+            register_fault(runtime.family, runtime.from_config)
 
 
 def build_fault(config: Mapping[str, Any]) -> FaultRuntime:

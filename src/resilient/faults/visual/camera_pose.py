@@ -79,9 +79,14 @@ def local_xyz_offset_quaternion(
 
 
 def _encode_number(value: float, precision: int = 1) -> str:
-    normalized = 0.0 if abs(value) < 0.5 * 10 ** (-precision) else value
+    if 0.0 < abs(value) < 1.0:
+        formatted = f"{abs(value):.4f}".rstrip("0").rstrip(".")
+        normalized = value
+    else:
+        normalized = 0.0 if abs(value) < 0.5 * 10 ** (-precision) else value
+        formatted = f"{abs(normalized):.{precision}f}"
     sign = "p" if normalized >= 0 else "m"
-    return sign + f"{abs(normalized):.{precision}f}".replace(".", "p")
+    return sign + formatted.replace(".", "p")
 
 
 class CameraPoseFaultRuntime(FaultRuntime):
@@ -137,6 +142,14 @@ class CameraPoseFaultRuntime(FaultRuntime):
             rotation_offset_deg = rotation
         elif operation_type == "pose_offset":
             rotation_offset_deg = parameters.get("rotation_offset_deg", (0.0, 0.0, 0.0))
+            if severity.name == "translation_norm":
+                if severity.unit not in {"metre", "meter", "m"}:
+                    raise ValueError("Camera translation severity unit must be metre.")
+                offset_norm = math.sqrt(sum(float(value) ** 2 for value in position_offset))
+                if not math.isclose(offset_norm, severity.value, rel_tol=1e-6, abs_tol=1e-9):
+                    raise ValueError(
+                        "translation_norm severity must equal the position-offset norm."
+                    )
         else:
             raise ValueError(f"Unsupported camera-pose operation: {operation_type}")
         return cls(
@@ -261,6 +274,7 @@ class CameraPoseFaultRuntime(FaultRuntime):
                 "rotation_frame": "camera_local",
                 "rotation_order": "xyz",
             },
+            "injection_layer": "mujoco_camera_extrinsics",
         }
         return payload
 
