@@ -236,7 +236,7 @@ Fault 定义是 `configs/fault/` 下与模型解耦的 YAML。创建环境时，
 | V5 光照变化 | `visual.illumination` | observation 离开环境前做仿射 RGB 响应 | `visual/illumination_change.yaml`：gain 0.2 并带颜色偏移 |
 | E1 关节运动退化 | `structure.joint_motion` | 按比例保留每个 dynamics step 的实际位移与速度 | `structure/joint_motion_degradation.yaml`：关节 1 保留 0.2 |
 | E2 关节位置偏置 | `structure.joint_position_bias` | 每次加载状态后引入一次固定且不累加的关节零点偏置 | `structure/joint_position_bias.yaml`：关节 1 +20 度 |
-| E3 关节回差 | `structure.joint_backlash` | 每次运动反向后先消耗空行程 | `structure/joint_backlash.yaml`：关节 1 间隙 12 度 |
+| E3 关节回差 | `structure.joint_backlash` | 每次运动反向后先消耗空行程 | `structure/joint_backlash.yaml`：关节 1 间隙 3 度 |
 | E4 关节范围限制 | `structure.joint_range_limit` | 把实际关节位置裁剪到缩小后的绝对边界 | `structure/joint_range_limitation.yaml`：关节 1 限于 [-10,+10] 度 |
 | E5 周期性关节冻结 | `structure.periodic_joint_freeze` | 关节越过按角度周期分布的坏齿位置时冻结 | `structure/periodic_joint_freeze.yaml`：每 10 度触发并保持 35 个控制步 |
 

@@ -1,5 +1,5 @@
 pipeline:
-  id: catalog_e3_joint_backlash_severe
+  id: catalog_e3_joint_backlash_moderate
   enabled: true
   seed: 42
   faults:
@@ -8,7 +8,7 @@ pipeline:
       enabled: true
       targets: [robot0_joint1]
       operation: {type: reversal_dead_travel}
-      severity: {name: backlash_gap, value: 12.0, unit: degree, level: severe}
+      severity: {name: backlash_gap, value: 3.0, unit: degree, level: moderate}
       parameters:
-        gap_deg: 12.0
+        gap_deg: 3.0
         direction_epsilon_rad: 1.0e-7

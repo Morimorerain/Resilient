@@ -239,7 +239,7 @@ make demonstrations easy to inspect; change `severity` and the physical paramete
 | V5 Illumination Change | `visual.illumination` | Affine RGB response before the observation leaves the environment | `visual/illumination_change.yaml`: gain 0.2 with color shift |
 | E1 Joint Motion Degradation | `structure.joint_motion` | Retains a fraction of realized per-step displacement/velocity | `structure/joint_motion_degradation.yaml`: joint 1 retention 0.2 |
 | E2 Joint Position Bias | `structure.joint_position_bias` | Introduces one fixed, non-cumulative joint zero offset per loaded state | `structure/joint_position_bias.yaml`: joint 1 +20 deg |
-| E3 Joint Backlash | `structure.joint_backlash` | Consumes joint travel after each direction reversal | `structure/joint_backlash.yaml`: joint 1 gap 12 deg |
+| E3 Joint Backlash | `structure.joint_backlash` | Consumes joint travel after each direction reversal | `structure/joint_backlash.yaml`: joint 1 gap 3 deg |
 | E4 Joint Range Limitation | `structure.joint_range_limit` | Clips realized joint position to reduced absolute bounds | `structure/joint_range_limitation.yaml`: joint 1 in [-10, +10] deg |
 | E5 Periodic Joint Freeze | `structure.periodic_joint_freeze` | Freezes when the joint crosses angularly periodic defective-gear positions | `structure/periodic_joint_freeze.yaml`: every 10 deg, hold 35 control steps |
 
