@@ -50,8 +50,13 @@ entries:
     action_dimension: 8
     phases:
       - {name: warmup, steps: 10, action: [0, 0, 0, 0, 0, 0, 0, -1]}
-      - {name: joint1_positive, steps: 65, action: [0.80, 0, 0, 0, 0, 0, 0, -1]}
-      - {name: joint1_reverse, steps: 65, action: [-0.80, 0, 0, 0, 0, 0, 0, -1]}
+
+      - {name: joint1_right, steps: 65, action: [0.80, 0, 0, 0, 0, 0, 0, -1]}
+
+      - {name: joint1_left, steps: 65, action: [-0.80, 0, 0, 0, 0, 0, 0, -1]}
+
+      - {name: joint1_right_again, steps: 65, action: [0.80, 0, 0, 0, 0, 0, 0, -1]}
+
       - {name: settle, steps: 15, action: [0, 0, 0, 0, 0, 0, 0, -1]}
   - id: E4_joint_range_limitation
     kind: embodiment
