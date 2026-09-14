@@ -685,8 +685,31 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 \
 采集按完整 state 自动续跑。Stage I 每个 epoch 单独保存完整断点，只保留最近三个；每个断点含
 `joint_adapter.pt`、逐 rank optimizer/RNG、scheduler 状态及严格配置哈希，最终 adapter 复制到
 `<run>/stage1/final/joint_adapter.pt`。Stage II 使用标准 Outcome-FPO 断点布局
-`<run>/stage2/checkpoints/`，最终 epoch adapter 即两阶段策略。参考硬件为 Linux、CUDA 12.8、
-bf16 与四张 RTX 6000 Ada 48 GB。
+`<run>/stage2/checkpoints/`，最终 epoch adapter 即两阶段策略。
+`checkpoint_retention.rolling_keep_last` 控制 epoch 内滚动恢复点数量，
+`checkpoint_retention.epoch_keep_last` 控制最新完整 epoch 断点数量（设为 `null` 表示全部保留），
+`checkpoint_retention.preserve_epochs` 列出额外永久保留的里程碑 epoch。task 7 配置依次使用
+`3`、`1` 和 `[1]`，因此续训到 epoch 7 后只保留完整的 epoch 1 与 epoch 7 断点。
+
+若要扩展已经完成的 Stage II，并严格恢复 AdamW、RNG、group 位置和 LoRA 状态，应提高总 epoch
+上限并在同一输出目录使用 `resume=auto`。与保存配置相比，只允许更改
+`outcome_fpo.num_epochs` 和断点保留参数：
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3 \
+  accelerate launch \
+  --config_file scripts/accelerate_configs/accelerate_opsd_zero2_ds.yaml \
+  --num_processes 4 scripts/resilient/train_outcome_fpo.py \
+  --config-name two_stage_opsd/fastwam_libero10_task7_joint1_half \
+  output_dir=runs/two_stage_opsd/libero10_task7_joint1_half_seed42/stage2 \
+  two_stage_opsd.distributed.num_processes=4 \
+  two_stage_opsd.stage2.initial_adapter=runs/two_stage_opsd/libero10_task7_joint1_half_seed42/stage1/final/joint_adapter.pt \
+  learning_rate=1.0e-6 weight_decay=0.0 max_grad_norm=0.1 \
+  gradient_accumulation_steps=1 num_epochs=1 \
+  outcome_fpo.num_epochs=7 resume=auto
+```
+
+参考硬件为 Linux、CUDA 12.8、bf16 与四张 RTX 6000 Ada 48 GB。
 
 ## 扩展开关与基线保护
 

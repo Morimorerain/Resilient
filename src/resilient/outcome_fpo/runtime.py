@@ -68,9 +68,89 @@ def resolved_config_hash(cfg: DictConfig) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def resume_compatibility_hash(cfg: DictConfig) -> str:
+    """Hash training semantics while permitting horizon and retention changes."""
+    payload = OmegaConf.to_container(cfg, resolve=True)
+    if not isinstance(payload, dict):
+        raise TypeError("Resolved outcome-FPO configuration must be a mapping.")
+    payload["output_dir"] = "<runtime-output-dir>"
+    payload["resume"] = None
+    for key in (
+        "max_checkpoints",
+        "checkpoint_retention",
+    ):
+        payload.pop(key, None)
+    section = payload.get("outcome_fpo")
+    if isinstance(section, dict):
+        section["validate_only"] = False
+        section.pop("num_epochs", None)
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _assert_resume_config_compatible(
+    current_cfg: DictConfig,
+    *,
+    checkpoint_dir: Path,
+    output_dir: Path,
+) -> tuple[str, Path | None]:
+    """Verify an exact resume, allowing only a longer epoch horizon and retention."""
+    state = json.loads(
+        (checkpoint_dir / "trainer_state.json").read_text(encoding="utf-8")
+    )
+    stored_hash = str(state["config_sha256"])
+    current_hash = resolved_config_hash(current_cfg)
+    candidates = [
+        checkpoint_dir / "resolved_config.yaml",
+        output_dir / "resolved_config.yaml",
+    ]
+    previous_path = next((path for path in candidates if path.is_file()), None)
+    if stored_hash == current_hash:
+        return stored_hash, previous_path
+    if previous_path is None:
+        raise ValueError(
+            "Cannot verify an extended Outcome-FPO resume without the checkpoint's "
+            "original resolved_config.yaml."
+        )
+    previous_cfg = OmegaConf.load(previous_path)
+    if resolved_config_hash(previous_cfg) != stored_hash:
+        raise ValueError("Outcome-FPO checkpoint configuration hash mismatch.")
+    if resume_compatibility_hash(previous_cfg) != resume_compatibility_hash(current_cfg):
+        raise ValueError(
+            "Outcome-FPO resume changed an algorithmic setting other than num_epochs."
+        )
+    completed_epochs = int(state["epoch"])
+    requested_epochs = int(current_cfg.outcome_fpo.num_epochs)
+    if requested_epochs <= completed_epochs:
+        raise ValueError(
+            "Extended Outcome-FPO num_epochs must exceed the completed checkpoint epoch."
+        )
+    return stored_hash, previous_path
+
+
 def _resolve_project_path(value: str) -> Path:
     path = Path(str(value)).expanduser()
     return path.resolve() if path.is_absolute() else (Path.cwd() / path).resolve()
+
+
+def _checkpoint_retention(cfg: DictConfig) -> tuple[int, int | None, list[int]]:
+    """Resolve backward-compatible rolling and epoch checkpoint retention."""
+    section = cfg.get("checkpoint_retention")
+    if section is None:
+        return int(cfg.max_checkpoints), None, []
+    rolling_keep = int(section.get("rolling_keep_last", cfg.max_checkpoints))
+    epoch_value = section.get("epoch_keep_last")
+    epoch_keep = None if epoch_value is None else int(epoch_value)
+    preserve_epochs = [int(value) for value in section.get("preserve_epochs", [])]
+    if rolling_keep <= 0:
+        raise ValueError("checkpoint_retention.rolling_keep_last must be positive.")
+    if epoch_keep is not None and epoch_keep <= 0:
+        raise ValueError("checkpoint_retention.epoch_keep_last must be positive or null.")
+    if any(epoch <= 0 for epoch in preserve_epochs):
+        raise ValueError("checkpoint_retention.preserve_epochs must contain positive epochs.")
+    if len(set(preserve_epochs)) != len(preserve_epochs):
+        raise ValueError("checkpoint_retention.preserve_epochs must be unique.")
+    return rolling_keep, epoch_keep, preserve_epochs
 
 
 def _resolve_resume(output_dir: Path, resume: str | None) -> Path | None:
@@ -228,6 +308,7 @@ def validate_outcome_fpo_config(
     ):
         raise ValueError("Selected Outcome-FPO tasks do not have complete disjoint state splits.")
     adapter = FastWAMLoraConfig.from_config(OmegaConf.to_container(cfg.adapter, resolve=True))
+    rolling_keep, epoch_keep, preserve_epochs = _checkpoint_retention(cfg)
     return {
         "config_sha256": resolved_config_hash(cfg),
         "method": "outcome_guided_flow_policy_optimization",
@@ -247,6 +328,11 @@ def validate_outcome_fpo_config(
         "train_state_count": len(selected_training),
         "validation_state_count": len(selected_validation),
         "split_overlap_checked": True,
+        "checkpoint_retention": {
+            "rolling_keep_last": rolling_keep,
+            "epoch_keep_last": epoch_keep,
+            "preserve_epochs": preserve_epochs,
+        },
     }
 
 
@@ -634,13 +720,30 @@ def run_outcome_fpo_training(cfg: DictConfig) -> None:
     """Train a Fault-specialized Recovery LoRA with exactly 4 or 8 ranks."""
     accelerator = Accelerator(mixed_precision=str(cfg.mixed_precision))
     provenance = validate_outcome_fpo_config(cfg, world_size=accelerator.num_processes)
+    rolling_keep, epoch_keep, preserve_epochs = _checkpoint_retention(cfg)
     output_dir = _resolve_project_path(str(cfg.output_dir))
     output_dir.mkdir(parents=True, exist_ok=True)
+    resume_path = _resolve_resume(output_dir, None if cfg.resume is None else str(cfg.resume))
+    resume_checkpoint_hash: str | None = None
+    previous_config_path: Path | None = None
+    if resume_path is not None:
+        resume_checkpoint_hash, previous_config_path = _assert_resume_config_compatible(
+            cfg,
+            checkpoint_dir=resume_path,
+            output_dir=output_dir,
+        )
     if accelerator.is_main_process:
+        if resume_path is not None and previous_config_path is not None:
+            checkpoint_config = resume_path / "resolved_config.yaml"
+            if not checkpoint_config.is_file():
+                checkpoint_config.write_text(
+                    previous_config_path.read_text(encoding="utf-8"), encoding="utf-8"
+                )
         OmegaConf.save(cfg, output_dir / "resolved_config.yaml", resolve=True)
         (output_dir / "provenance.json").write_text(
             json.dumps(provenance, indent=2) + "\n", encoding="utf-8"
         )
+    accelerator.wait_for_everyone()
 
     set_global_seed(int(cfg.seed) + accelerator.process_index, get_worker_init_fn=False)
     model_dtype = _mixed_precision_to_model_dtype(str(cfg.mixed_precision))
@@ -682,9 +785,10 @@ def run_outcome_fpo_training(cfg: DictConfig) -> None:
         minimum_reward_std=float(section.fpo.minimum_reward_std),
         max_grad_norm=float(cfg.max_grad_norm),
     )
-    resume_path = _resolve_resume(output_dir, None if cfg.resume is None else str(cfg.resume))
     if resume_path is not None:
-        trainer.load_checkpoint(resume_path, config_hash=provenance["config_sha256"])
+        if resume_checkpoint_hash is None:
+            raise RuntimeError("Resume checkpoint hash was not validated.")
+        trainer.load_checkpoint(resume_path, config_hash=resume_checkpoint_hash)
 
     stats = load_dataset_stats_from_json(
         str(_resolve_project_path(str(section.dataset_stats_path)))
@@ -785,21 +889,39 @@ def run_outcome_fpo_training(cfg: DictConfig) -> None:
                 and trainer.global_step % save_every == 0
                 and before_final_collection
             ):
-                trainer.save_checkpoint(
+                checkpoint_dir = trainer.save_checkpoint(
                     output_dir,
                     config_hash=provenance["config_sha256"],
                     fault_state={},
                 )
-                trainer.prune_checkpoints(output_dir, keep=int(cfg.max_checkpoints))
+                if accelerator.is_main_process:
+                    OmegaConf.save(
+                        cfg, checkpoint_dir / "resolved_config.yaml", resolve=True
+                    )
+                accelerator.wait_for_everyone()
+                trainer.prune_checkpoints(
+                    output_dir,
+                    keep=rolling_keep,
+                    keep_epochs=epoch_keep,
+                    preserve_epochs=preserve_epochs,
+                )
 
         trainer.epoch = epoch_index + 1
-        trainer.save_checkpoint(
+        checkpoint_dir = trainer.save_checkpoint(
             output_dir,
             config_hash=provenance["config_sha256"],
             fault_state={},
             epoch_number=schedule_epoch + 1,
         )
-        trainer.prune_checkpoints(output_dir, keep=int(cfg.max_checkpoints))
+        if accelerator.is_main_process:
+            OmegaConf.save(cfg, checkpoint_dir / "resolved_config.yaml", resolve=True)
+        accelerator.wait_for_everyone()
+        trainer.prune_checkpoints(
+            output_dir,
+            keep=rolling_keep,
+            keep_epochs=epoch_keep,
+            preserve_epochs=preserve_epochs,
+        )
         logging.info(
             "Completed outcome-FPO epoch %d/%d at optimizer step %d.",
             trainer.epoch,

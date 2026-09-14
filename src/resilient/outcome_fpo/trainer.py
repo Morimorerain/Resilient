@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import shutil
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -202,14 +203,38 @@ class OutcomeFPOTrainer:
         self.epoch = int(payload["epoch"])
         self.group_index = int(payload["group_index"])
 
-    def prune_checkpoints(self, output_dir: Path, *, keep: int) -> None:
-        """Keep the newest rolling states without deleting epoch checkpoints."""
+    def prune_checkpoints(
+        self,
+        output_dir: Path,
+        *,
+        keep: int,
+        keep_epochs: int | None = None,
+        preserve_epochs: Sequence[int] = (),
+    ) -> None:
+        """Prune rolling states and optionally retain selected epoch checkpoints."""
         if keep <= 0:
             raise ValueError("Checkpoint retention must be positive.")
+        if keep_epochs is not None and int(keep_epochs) <= 0:
+            raise ValueError("Epoch checkpoint retention must be positive when enabled.")
+        preserved = {int(epoch) for epoch in preserve_epochs}
+        if any(epoch <= 0 for epoch in preserved):
+            raise ValueError("Preserved epoch checkpoint numbers must be positive.")
         self.accelerator.wait_for_everyone()
         if self.accelerator.is_main_process:
             root = output_dir / "checkpoints" / "state"
             checkpoints = sorted(root.glob("step_*")) if root.exists() else []
             for path in checkpoints[:-keep]:
                 shutil.rmtree(path)
+            if keep_epochs is not None:
+                epoch_root = output_dir / "checkpoints" / "epochs"
+                epoch_checkpoints = (
+                    sorted(epoch_root.glob("epoch_*_step_*"))
+                    if epoch_root.exists()
+                    else []
+                )
+                newest = set(epoch_checkpoints[-int(keep_epochs) :])
+                for path in epoch_checkpoints:
+                    epoch_number = int(path.name.split("_", maxsplit=2)[1])
+                    if path not in newest and epoch_number not in preserved:
+                        shutil.rmtree(path)
         self.accelerator.wait_for_everyone()

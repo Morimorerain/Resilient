@@ -141,6 +141,12 @@ adapter:
 # Stage-II checkpoint controls; the launcher overrides optimizer fields below.
 save_every: 0
 max_checkpoints: 3
+checkpoint_retention:
+  rolling_keep_last: ${max_checkpoints}
+  # Set to null to retain every completed epoch checkpoint.
+  epoch_keep_last: 1
+  # Milestones are retained in addition to the newest completed epochs.
+  preserve_epochs: [1]
 
 hydra:
   job:

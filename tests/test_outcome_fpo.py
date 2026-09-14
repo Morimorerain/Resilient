@@ -10,6 +10,7 @@ from pathlib import Path
 
 import torch
 import torch.nn as nn
+from omegaconf import OmegaConf
 
 from resilient.opsd.model_adapter import FastWAMActionFlowScorer
 from resilient.opsd.types import ActionConditioning as OPSDActionConditioning
@@ -22,7 +23,11 @@ from resilient.outcome_fpo.collector import (
 from resilient.outcome_fpo.objective import compute_fpo_ratio, fpo_clipped_objective
 from resilient.outcome_fpo.outcome import OutcomeTarget, outcome_cosine_reward
 from resilient.outcome_fpo.policy import sample_action_chunk, sample_cfm_pairs
-from resilient.outcome_fpo.runtime import _resolve_resume
+from resilient.outcome_fpo.runtime import (
+    _assert_resume_config_compatible,
+    _resolve_resume,
+    resolved_config_hash,
+)
 from resilient.outcome_fpo.trainer import OutcomeFPOTrainer
 from resilient.outcome_fpo.types import ActionConditioning, CandidateSample, OutcomeGroup
 
@@ -135,7 +140,7 @@ class CollectionTests(unittest.TestCase):
 
 
 class CheckpointTests(unittest.TestCase):
-    def test_retention_prunes_only_rolling_states(self) -> None:
+    def test_retention_keeps_preserved_and_latest_epoch(self) -> None:
         class _Accelerator:
             is_main_process = True
 
@@ -151,16 +156,79 @@ class CheckpointTests(unittest.TestCase):
             epoch_root = output_dir / "checkpoints" / "epochs"
             for step in (100, 200, 300, 400):
                 (state_root / f"step_{step:08d}").mkdir(parents=True)
-            epoch_checkpoint = epoch_root / "epoch_0001_step_00000500"
-            epoch_checkpoint.mkdir(parents=True)
+            for epoch_index in range(1, 5):
+                (epoch_root / f"epoch_{epoch_index:04d}_step_{epoch_index * 50:08d}").mkdir(
+                    parents=True
+                )
 
-            trainer.prune_checkpoints(output_dir, keep=3)
+            trainer.prune_checkpoints(
+                output_dir,
+                keep=3,
+                keep_epochs=1,
+                preserve_epochs=[1],
+            )
 
             self.assertEqual(
                 sorted(path.name for path in state_root.iterdir()),
                 ["step_00000200", "step_00000300", "step_00000400"],
             )
-            self.assertTrue(epoch_checkpoint.is_dir())
+            self.assertEqual(
+                sorted(path.name for path in epoch_root.iterdir()),
+                ["epoch_0001_step_00000050", "epoch_0004_step_00000200"],
+            )
+
+    def test_extended_horizon_is_resume_compatible(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output_dir = Path(directory)
+            checkpoint = output_dir / "checkpoints/epochs/epoch_0001_step_00000050"
+            checkpoint.mkdir(parents=True)
+            previous = OmegaConf.create(
+                {
+                    "output_dir": str(output_dir),
+                    "resume": None,
+                    "learning_rate": 1.0e-6,
+                    "max_checkpoints": 3,
+                    "outcome_fpo": {"validate_only": False, "num_epochs": 1},
+                }
+            )
+            OmegaConf.save(previous, output_dir / "resolved_config.yaml", resolve=True)
+            stored_hash = resolved_config_hash(previous)
+            (checkpoint / "trainer_state.json").write_text(
+                json.dumps(
+                    {"config_sha256": stored_hash, "epoch": 1, "global_step": 50}
+                ),
+                encoding="utf-8",
+            )
+            current = OmegaConf.create(
+                {
+                    "output_dir": str(output_dir),
+                    "resume": "auto",
+                    "learning_rate": 1.0e-6,
+                    "max_checkpoints": 3,
+                    "checkpoint_retention": {
+                        "rolling_keep_last": 3,
+                        "epoch_keep_last": 1,
+                        "preserve_epochs": [1],
+                    },
+                    "outcome_fpo": {"validate_only": False, "num_epochs": 7},
+                }
+            )
+
+            checkpoint_hash, config_path = _assert_resume_config_compatible(
+                current,
+                checkpoint_dir=checkpoint,
+                output_dir=output_dir,
+            )
+
+            self.assertEqual(checkpoint_hash, stored_hash)
+            self.assertEqual(config_path, output_dir / "resolved_config.yaml")
+            current.learning_rate = 2.0e-6
+            with self.assertRaisesRegex(ValueError, "algorithmic setting"):
+                _assert_resume_config_compatible(
+                    current,
+                    checkpoint_dir=checkpoint,
+                    output_dir=output_dir,
+                )
 
     def test_auto_resume_considers_epoch_and_rolling_checkpoints(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

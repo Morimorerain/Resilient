@@ -740,8 +740,31 @@ Collection resumes per completed state. Stage I saves one complete epoch checkpo
 newest three; each contains `joint_adapter.pt`, per-rank optimizer/RNG state, scheduler state, and a
 strict configuration hash. Its final adapter is copied to `<run>/stage1/final/joint_adapter.pt`.
 Stage II writes standard Outcome-FPO checkpoints under `<run>/stage2/checkpoints/`; its final epoch
-adapter is the completed two-stage policy. Hardware remains Linux, CUDA 12.8, bf16, and four RTX
-6000 Ada 48 GB GPUs.
+adapter is the completed two-stage policy. `checkpoint_retention.rolling_keep_last` controls
+within-epoch recovery states, `checkpoint_retention.epoch_keep_last` controls the newest complete
+epoch checkpoints (`null` keeps all), and `checkpoint_retention.preserve_epochs` lists milestone
+epochs retained in addition to that rolling set. The task-7 configuration uses `3`, `1`, and `[1]`,
+respectively, so an extension through epoch 7 retains complete epoch 1 and epoch 7 checkpoints.
+
+To extend a completed Stage II without resetting AdamW, RNG, group position, or LoRA state, increase
+the total horizon and resume the same output directory. Only `outcome_fpo.num_epochs` and checkpoint
+retention may differ from the saved resolved configuration:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3 \
+  accelerate launch \
+  --config_file scripts/accelerate_configs/accelerate_opsd_zero2_ds.yaml \
+  --num_processes 4 scripts/resilient/train_outcome_fpo.py \
+  --config-name two_stage_opsd/fastwam_libero10_task7_joint1_half \
+  output_dir=runs/two_stage_opsd/libero10_task7_joint1_half_seed42/stage2 \
+  two_stage_opsd.distributed.num_processes=4 \
+  two_stage_opsd.stage2.initial_adapter=runs/two_stage_opsd/libero10_task7_joint1_half_seed42/stage1/final/joint_adapter.pt \
+  learning_rate=1.0e-6 weight_decay=0.0 max_grad_norm=0.1 \
+  gradient_accumulation_steps=1 num_epochs=1 \
+  outcome_fpo.num_epochs=7 resume=auto
+```
+
+Hardware remains Linux, CUDA 12.8, bf16, and four RTX 6000 Ada 48 GB GPUs.
 
 ## Extension switches and baseline protection
 
