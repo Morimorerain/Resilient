@@ -56,6 +56,8 @@ class RolloutDescriptor:
     environment_seed: int
     inference_seed: int
     sample_id: int
+    anchor_index: int = 0
+    anchor_step: int = 0
 
 
 def _derive_seed(base_seed: int, *identity: object) -> int:

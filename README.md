@@ -680,6 +680,68 @@ multi-GPU model loading, peak memory, optimizer-step behavior, throughput, and f
 quality have not yet been smoke-tested; do not treat the current code-only validation as an
 experimental result. Generated runs and checkpoints remain ignored by Git.
 
+## Two-stage single-task embodiment-Fault adaptation
+
+The two-stage path specializes one LoRA per `(task, Fault)` pair. The first maintained experiment
+uses `libero_10` task 7 (put both the alphabet soup and cream-cheese box in the basket) and the
+simulator-owned `robot0_joint1` motion-retention Fault at severity 0.5. Both stages share one LoRA
+layout over `video_expert`, `action_expert`, and `proprio_encoder`; Stage II continues the Stage-I
+adapter rather than stacking a second adapter.
+
+Stage I collects base Fast-WAM trajectories from official training states 0--49 under the Fault.
+It stores full trajectories once and indexes overlapping windows, so 12,000 training windows do
+not duplicate image data. Each state contributes exactly 240 valid windows; collection stops an
+episode when the task succeeds and starts another deterministic rollout if necessary. Every sample
+contains 32 actions, the corresponding normalized proprioception, and dual-camera frames at
+`0,4,...,32`. Training calls the unchanged `FastWAM.training_loss()` with equal video/action loss
+weights. It deliberately keeps `model.video_dit_config.action_conditioned=false`: this is the
+released Fast-WAM video--action joint training path, not an explicit Action-to-Video causal bridge.
+The recipe is 10 epochs, 12,000 windows, global batch 128, AdamW `(0.9,0.95)`, learning rate `1e-4`,
+weight decay `1e-2`, 5% warm-up plus cosine decay, bf16, and gradient norm 1.0.
+
+Stage II reuses the maintained Outcome-FPO implementation. For every one of the same 50 training
+states, the current Student visits four causal anchors at action steps `0,80,160,240` under the
+Fault. At each anchor it samples four 32-action candidates from the same state and scores their
+realized nine-frame outcomes against the LoRA-disabled frozen base Teacher. The sole reward remains
+Video-DiT block-19 temporal-change cosine similarity at timestep 500. Eight conditional
+flow-matching Monte Carlo pairs, two policy update epochs, clip 0.05, learning rate `1e-6`, and
+gradient norm 0.1 produce 200 groups, 800 candidate rollouts, and 50 optimizer steps.
+
+The implementation is organized as follows:
+
+| Path | Responsibility |
+| --- | --- |
+| `src/resilient/two_stage_opsd/stage1_collector.py` | Resumable base-policy Fault rollout collection |
+| `src/resilient/two_stage_opsd/dataset.py` | Compact trajectory-backed 32-action/9-frame dataset |
+| `src/resilient/two_stage_opsd/stage1_trainer.py` | Native joint-loss LoRA training and epoch resume state |
+| `src/resilient/outcome_fpo/runtime.py` | Reused Stage-II Teacher/reward/FPO runtime with causal anchors |
+| `configs/two_stage_opsd/fastwam_libero10_task7_joint1_half.yaml` | Task, split, collection, Stage-I, and Stage-II parameters |
+| `scripts/resilient/run_two_stage_opsd.sh` | Sequential four-GPU collection and two-stage launcher |
+
+The generated Stage-I data defaults to
+`data/generated/two_stage_opsd/libero10_task7_joint1_retention_p0p5/`; run artifacts default below
+`runs/two_stage_opsd/`. Both roots are ignored. Only the existing Fast-WAM checkpoint/statistics
+and LIBERO assets documented above are required; collection stores the task's frozen text context
+with the generated dataset, and no dependency was added. The split is
+the existing `opsd_step500_unseen_v1` state bank: training reads only official states 0--49, while
+evaluation must use the disjoint 50-state validation tensors. Startup verifies both manifests and
+rejects overlap.
+
+Run the complete pipeline on exactly four visible GPUs:
+
+```bash
+CUDA_VISIBLE_DEVICES=4,5,6,7 \
+  bash scripts/resilient/run_two_stage_opsd.sh \
+  runs/two_stage_opsd/libero10_task7_joint1_half_seed42
+```
+
+Collection resumes per completed state. Stage I saves one complete epoch checkpoint and retains the
+newest three; each contains `joint_adapter.pt`, per-rank optimizer/RNG state, scheduler state, and a
+strict configuration hash. Its final adapter is copied to `<run>/stage1/final/joint_adapter.pt`.
+Stage II writes standard Outcome-FPO checkpoints under `<run>/stage2/checkpoints/`; its final epoch
+adapter is the completed two-stage policy. Hardware remains Linux, CUDA 12.8, bf16, and four RTX
+6000 Ada 48 GB GPUs.
+
 ## Extension switches and baseline protection
 
 The following policy is mandatory:

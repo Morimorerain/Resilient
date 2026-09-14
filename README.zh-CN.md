@@ -631,6 +631,63 @@ ZeRO-2 启动配置，没有新增 Python 依赖，因此 `requirements*.txt`、
 当前尚未完成真实多卡模型加载、显存峰值、optimizer step、吞吐量和最终恢复效果烟测，不能将
 本轮代码级验证当作实验结果。生成的 run 和 checkpoint 均由 Git 忽略。
 
+## 单任务具身 Fault 两阶段适配
+
+两阶段路径针对每个 `(task, Fault)` 单独训练一个 LoRA。首个正式配置使用 `libero_10` task 7
+（把 alphabet soup 与 cream-cheese box 都放进篮子）及仿真器级 `robot0_joint1` 运动保留率
+0.5 Fault。两个阶段共用覆盖 `video_expert`、`action_expert`、`proprio_encoder` 的同一套 LoRA；
+Stage II 继续训练 Stage-I adapter，而不是再叠加一套 adapter。
+
+Stage I 在 Fault 环境中，使用 Fast-WAM 基座从官方训练状态 0--49 rollout。数据只保存一次完整
+轨迹，再用索引表示重叠窗口，因此 12,000 个训练窗口不会重复存储图像。每个状态严格产生 240
+个有效窗口；task 成功后立即停止该 episode，如窗口不足则以确定性新 seed 重新 rollout。每个
+样本包含 32 个实际执行动作、对应的归一化 proprio，以及 `0,4,...,32` 的双相机九帧。训练直接
+调用未修改的 `FastWAM.training_loss()`，video/action loss 权重均为 1。配置特意保持
+`model.video_dit_config.action_conditioned=false`：这里复用发布版 Fast-WAM 的 video--action 联合
+训练，不宣称存在显式的 Action-to-Video 因果通路。训练参数为 10 epoch、12,000 窗口、全局
+batch 128、AdamW `(0.9,0.95)`、学习率 `1e-4`、weight decay `1e-2`、5% warm-up 加 cosine、
+bf16、梯度范数 1.0。
+
+Stage II 复用现有 Outcome-FPO。对同一批 50 个训练状态，当前 Student 在 Fault 下分别到达动作
+步 `0,80,160,240` 的四个因果 anchor。每个 anchor 从同一 simulator state 采样四个 32-action
+候选，用其真实九帧结果与关闭 LoRA 的冻结基座 Teacher 比较；唯一 reward 仍是 timestep 500、
+Video DiT block 19 的时间变化 cosine similarity。每候选使用 8 个 conditional flow-matching
+Monte Carlo 对，每批数据更新 2 次，clip 0.05、学习率 `1e-6`、梯度范数 0.1；合计 200 个 group、
+800 个候选 Fault rollout 和 50 个 optimizer step。
+
+代码职责如下：
+
+| 路径 | 作用 |
+| --- | --- |
+| `src/resilient/two_stage_opsd/stage1_collector.py` | 可恢复的基座策略 Fault rollout 采集 |
+| `src/resilient/two_stage_opsd/dataset.py` | 轨迹级紧凑存储的 32-action/9-frame 数据集 |
+| `src/resilient/two_stage_opsd/stage1_trainer.py` | 原生联合 loss LoRA 训练与 epoch 断点 |
+| `src/resilient/outcome_fpo/runtime.py` | 复用的 Stage-II Teacher/reward/FPO 与因果 anchor |
+| `configs/two_stage_opsd/fastwam_libero10_task7_joint1_half.yaml` | task、split、采集和两阶段参数 |
+| `scripts/resilient/run_two_stage_opsd.sh` | 顺序执行采集与两阶段训练的四卡入口 |
+
+Stage-I 生成数据默认位于
+`data/generated/two_stage_opsd/libero10_task7_joint1_retention_p0p5/`，训练产物默认位于
+`runs/two_stage_opsd/`，两者均被 Git 忽略。它只依赖前文已经说明的 Fast-WAM checkpoint/统计与
+LIBERO 资产；采集阶段会把该 task 的冻结文本 context 和生成数据一起保存，没有新增依赖。数据划分
+复用 `opsd_step500_unseen_v1`：训练只读取官方
+状态 0--49，评测必须读取与其无交集的 50 个 validation tensor；程序启动时会同时校验两个
+manifest，并在存在交集时拒绝运行。
+
+在恰好四张可见 GPU 上顺序跑完：
+
+```bash
+CUDA_VISIBLE_DEVICES=4,5,6,7 \
+  bash scripts/resilient/run_two_stage_opsd.sh \
+  runs/two_stage_opsd/libero10_task7_joint1_half_seed42
+```
+
+采集按完整 state 自动续跑。Stage I 每个 epoch 单独保存完整断点，只保留最近三个；每个断点含
+`joint_adapter.pt`、逐 rank optimizer/RNG、scheduler 状态及严格配置哈希，最终 adapter 复制到
+`<run>/stage1/final/joint_adapter.pt`。Stage II 使用标准 Outcome-FPO 断点布局
+`<run>/stage2/checkpoints/`，最终 epoch adapter 即两阶段策略。参考硬件为 Linux、CUDA 12.8、
+bf16 与四张 RTX 6000 Ada 48 GB。
+
 ## 扩展开关与基线保护
 
 以下规则为强制要求：

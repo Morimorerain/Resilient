@@ -37,7 +37,7 @@ from resilient.opsd.adapters import (
     inject_fastwam_aligned_lora,
     load_adapter_state_dict,
 )
-from resilient.opsd.runtime import RolloutDescriptor, _derive_seed, build_rollout_schedule
+from resilient.opsd.runtime import RolloutDescriptor, _derive_seed
 from resilient.state_banks import (
     assert_disjoint_manifests,
     load_manifest,
@@ -159,7 +159,29 @@ def validate_outcome_fpo_config(
     global_groups = int(section.fpo.groups_per_global_update)
     if global_groups <= 0 or global_groups % requested_gpus != 0:
         raise ValueError("groups_per_global_update must divide evenly across all ranks.")
-    total_groups = len(section.rollout.suites) * 10 * int(section.rollout.rollouts_per_task)
+    task_ids = [
+        int(value)
+        for value in section.rollout.get("task_ids", list(range(10)))
+    ]
+    if not task_ids or len(set(task_ids)) != len(task_ids):
+        raise ValueError("rollout.task_ids must be a non-empty unique list.")
+    if any(task_id < 0 or task_id >= 10 for task_id in task_ids):
+        raise ValueError("Every LIBERO task id must be in [0, 9].")
+    anchor_steps = [
+        int(value) for value in section.rollout.get("anchor_steps", [0])
+    ]
+    if not anchor_steps or anchor_steps[0] != 0 or anchor_steps != sorted(set(anchor_steps)):
+        raise ValueError("rollout.anchor_steps must be sorted, unique, and start at zero.")
+    if any(value < 0 for value in anchor_steps):
+        raise ValueError("rollout.anchor_steps cannot contain negative values.")
+    if int(section.rollout.get("replan_steps", 10)) <= 0:
+        raise ValueError("rollout.replan_steps must be positive.")
+    total_groups = (
+        len(section.rollout.suites)
+        * len(task_ids)
+        * int(section.rollout.rollouts_per_task)
+        * len(anchor_steps)
+    )
     if total_groups % global_groups != 0:
         raise ValueError("The global rollout schedule must divide into complete FPO updates.")
 
@@ -183,6 +205,28 @@ def validate_outcome_fpo_config(
     training_manifest = load_manifest(training_path)
     validation_manifest = load_manifest(validation_path)
     assert_disjoint_manifests(validation_manifest, training_manifest)
+    selected_training = [
+        item
+        for item in training_manifest.get("states", [])
+        if str(item["suite"]) in {str(value) for value in section.rollout.suites}
+        and int(item["task_id"]) in set(task_ids)
+    ]
+    selected_validation = [
+        item
+        for item in validation_manifest.get("states", [])
+        if str(item["suite"]) in {str(value) for value in section.rollout.suites}
+        and int(item["task_id"]) in set(task_ids)
+    ]
+    expected_selected_states = (
+        len(section.rollout.suites)
+        * len(task_ids)
+        * int(section.rollout.rollouts_per_task)
+    )
+    if (
+        len(selected_training) != expected_selected_states
+        or len(selected_validation) != expected_selected_states
+    ):
+        raise ValueError("Selected Outcome-FPO tasks do not have complete disjoint state splits.")
     adapter = FastWAMLoraConfig.from_config(OmegaConf.to_container(cfg.adapter, resolve=True))
     return {
         "config_sha256": resolved_config_hash(cfg),
@@ -198,8 +242,10 @@ def validate_outcome_fpo_config(
         "groups_per_rank_per_update": global_groups // requested_gpus,
         "groups_per_epoch": total_groups,
         "candidates_per_epoch": total_groups * group_size,
-        "train_state_count": len(training_manifest.get("states", [])),
-        "validation_state_count": len(validation_manifest.get("states", [])),
+        "task_ids": task_ids,
+        "anchor_steps": anchor_steps,
+        "train_state_count": len(selected_training),
+        "validation_state_count": len(selected_validation),
         "split_overlap_checked": True,
     }
 
@@ -222,6 +268,132 @@ def _execute_warmup(env: Any, steps: int) -> Any:
         if done:
             raise RuntimeError("LIBERO task terminated during warm-up.")
     return obs
+
+
+def build_outcome_rollout_schedule(
+    *,
+    suites: list[str],
+    task_ids: list[int],
+    rollouts_per_task: int,
+    anchor_steps: list[int],
+    epoch: int,
+    schedule_seed: int,
+    environment_seed: int,
+    inference_seed: int,
+) -> list[RolloutDescriptor]:
+    """Build a deterministic same-task/state schedule with causal policy anchors."""
+    descriptors: list[RolloutDescriptor] = []
+    sample_id = 0
+    for suite_name in suites:
+        for task_id in task_ids:
+            for rollout_id in range(int(rollouts_per_task)):
+                for anchor_index, anchor_step in enumerate(anchor_steps):
+                    identity = (epoch, suite_name, task_id, rollout_id, anchor_index)
+                    descriptors.append(
+                        RolloutDescriptor(
+                            suite=suite_name,
+                            task_id=int(task_id),
+                            rollout_id=rollout_id,
+                            initial_state_index=rollout_id,
+                            environment_seed=_derive_seed(
+                                environment_seed, *identity, "environment"
+                            ),
+                            inference_seed=_derive_seed(
+                                inference_seed, *identity, "inference"
+                            ),
+                            sample_id=sample_id,
+                            anchor_index=anchor_index,
+                            anchor_step=int(anchor_step),
+                        )
+                    )
+                    sample_id += 1
+    generator = torch.Generator(device="cpu").manual_seed(
+        int(schedule_seed) + int(epoch)
+    )
+    permutation = torch.randperm(len(descriptors), generator=generator).tolist()
+    return [descriptors[index] for index in permutation]
+
+
+def _advance_to_anchor(
+    *,
+    env: Any,
+    initial_state: torch.Tensor,
+    initial_observation: Any,
+    descriptor: RolloutDescriptor,
+    task_description: str,
+    cfg: DictConfig,
+    processor: FastWAMProcessor,
+    model,
+    video_height: int,
+    video_width: int,
+) -> tuple[Any, int, bool]:
+    """Reach an anchor with the current Student under the installed Fault."""
+    target_step = int(descriptor.anchor_step)
+    if target_step == 0:
+        return initial_observation, 0, False
+    section = cfg.outcome_fpo.rollout
+    max_attempts = int(section.get("max_anchor_attempts", 3))
+    last_observation = initial_observation
+    last_steps = 0
+    for attempt in range(max_attempts):
+        if attempt == 0:
+            observation = initial_observation
+        else:
+            env.reset()
+            observation = env.set_init_state(initial_state)
+            warmed = _execute_warmup(env, int(section.num_steps_wait))
+            if warmed is not None:
+                observation = warmed
+        steps = 0
+        terminated = False
+        replan_index = 0
+        while steps < target_step:
+            conditioning = _make_conditioning(
+                observation,
+                task_description=task_description,
+                cfg=cfg,
+                processor=processor,
+                model=model,
+                video_height=video_height,
+                video_width=video_width,
+            )
+            with torch.no_grad():
+                normalized_action = sample_action_chunk(
+                    model,
+                    conditioning,
+                    action_horizon=int(section.action_horizon),
+                    num_inference_steps=int(section.num_inference_steps),
+                    sigma_shift=None,
+                    seed=_derive_seed(
+                        descriptor.inference_seed,
+                        descriptor.sample_id,
+                        descriptor.anchor_index,
+                        attempt,
+                        replan_index,
+                        "anchor-action",
+                    ),
+                    rand_device=str(section.rand_device),
+                    compile_action_infer=bool(section.compile_action_infer),
+                )
+            raw_action = _denormalize_candidate(
+                normalized_action,
+                processor,
+                binarize_gripper=bool(section.binarize_gripper),
+            )
+            execute = min(int(section.get("replan_steps", 10)), target_step - steps)
+            for action in raw_action[:execute]:
+                observation, _, done, _ = env.step(action)
+                steps += 1
+                if done:
+                    terminated = True
+                    break
+            if terminated:
+                break
+            replan_index += 1
+        last_observation, last_steps = observation, steps
+        if not terminated:
+            return observation, steps, False
+    return last_observation, last_steps, True
 
 
 def _denormalize_candidate(
@@ -275,6 +447,7 @@ def _collect_group(
     video_width: int,
     training_records: dict[tuple[str, int, int], dict[str, Any]],
 ) -> OutcomeGroup:
+    model.eval()
     section = cfg.outcome_fpo
     suite = benchmark.get_benchmark_dict()[descriptor.suite]()
     task = suite.get_task(descriptor.task_id)
@@ -308,6 +481,18 @@ def _collect_group(
         warmed_obs = _execute_warmup(main_env, int(section.rollout.num_steps_wait))
         if warmed_obs is not None:
             obs = warmed_obs
+        obs, reached_anchor_step, terminal_before_anchor = _advance_to_anchor(
+            env=main_env,
+            initial_state=state,
+            initial_observation=obs,
+            descriptor=descriptor,
+            task_description=task_description,
+            cfg=cfg,
+            processor=processor,
+            model=model,
+            video_height=video_height,
+            video_width=video_width,
+        )
         conditioning = _make_conditioning(
             obs,
             task_description=task_description,
@@ -428,6 +613,10 @@ def _collect_group(
                 "suite": descriptor.suite,
                 "task_id": descriptor.task_id,
                 "rollout_id": descriptor.rollout_id,
+                "anchor_index": descriptor.anchor_index,
+                "anchor_step": descriptor.anchor_step,
+                "reached_anchor_step": reached_anchor_step,
+                "terminal_before_anchor": terminal_before_anchor,
                 "initial_state_index": descriptor.initial_state_index,
                 "sample_id": descriptor.sample_id,
                 "environment_seed": descriptor.environment_seed,
@@ -504,8 +693,14 @@ def run_outcome_fpo_training(cfg: DictConfig) -> None:
     processor.set_normalizer_from_stats(stats)
     video_height, video_width = (int(value) for value in cfg.data.train.video_size)
     suites = [str(value) for value in section.rollout.suites]
+    task_ids = [
+        int(value) for value in section.rollout.get("task_ids", list(range(10)))
+    ]
+    anchor_steps = [int(value) for value in section.rollout.get("anchor_steps", [0])]
     rollouts_per_task = int(section.rollout.rollouts_per_task)
-    global_groups_per_epoch = len(suites) * 10 * rollouts_per_task
+    global_groups_per_epoch = (
+        len(suites) * len(task_ids) * rollouts_per_task * len(anchor_steps)
+    )
     local_groups_per_epoch = global_groups_per_epoch // accelerator.num_processes
     local_collection_size = int(section.fpo.groups_per_global_update) // accelerator.num_processes
     completed_before_epoch = trainer.epoch * local_groups_per_epoch
@@ -521,10 +716,11 @@ def run_outcome_fpo_training(cfg: DictConfig) -> None:
 
     for epoch_index in range(trainer.epoch, int(section.num_epochs)):
         schedule_epoch = epoch_index + int(section.epoch_offset)
-        schedule = build_rollout_schedule(
+        schedule = build_outcome_rollout_schedule(
             suites=suites,
-            tasks_per_suite=10,
+            task_ids=task_ids,
             rollouts_per_task=rollouts_per_task,
+            anchor_steps=anchor_steps,
             epoch=schedule_epoch,
             schedule_seed=int(section.rollout.schedule_seed),
             environment_seed=int(section.rollout.environment_seed),

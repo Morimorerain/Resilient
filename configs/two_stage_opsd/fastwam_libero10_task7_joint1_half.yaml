@@ -1,0 +1,146 @@
+# @package _global_
+
+defaults:
+  - /train
+  - /fault: structure/panda_joint1_half_motion
+  - /adapter: fastwam_aligned_lora
+  - override /task: libero_uncond_2cam224_1e-4
+  - _self_
+
+ckpt: checkpoints/fastwam_release/libero_uncond_2cam224.pt
+output_dir: runs/two_stage_opsd/libero10_task7_joint1_retention_p0p5/${now:%Y-%m-%d}_${now:%H-%M-%S}
+resume: null
+
+model:
+  load_text_encoder: true
+  skip_dit_load_from_pretrain: true
+  action_dit_pretrained_path: null
+  video_dit_config:
+    # Keep the released Fast-WAM architecture; Stage I uses native joint training.
+    action_conditioned: false
+
+# Stage-I native Fast-WAM optimization recipe.
+batch_size: 16
+num_workers: 0
+learning_rate: 1.0e-4
+weight_decay: 1.0e-2
+lr_scheduler_type: cosine
+num_epochs: 10
+gradient_accumulation_steps: 2
+mixed_precision: bf16
+max_grad_norm: 1.0
+log_every: 10
+
+two_stage_opsd:
+  mode: validate
+  dataset_stats_path: checkpoints/fastwam_release/libero_uncond_2cam224_dataset_stats.json
+
+  distributed:
+    num_processes: 4
+
+  task:
+    suite: libero_10
+    task_id: 7
+
+  split:
+    states_per_split: 50
+    training_reference_manifest: data/libero_state_banks/opsd_step500_unseen_v1/training_reference_manifest.json
+    validation_manifest: data/libero_state_banks/opsd_step500_unseen_v1/validation_manifest.json
+
+  stage1:
+    dataset_dir: data/generated/two_stage_opsd/libero10_task7_joint1_retention_p0p5
+    collection:
+      state_indices: null
+      windows_per_state: 240
+      max_actions_per_episode: 271
+      max_attempts_per_state: 8
+      num_steps_wait: 30
+      action_horizon: 32
+      replan_steps: 10
+      num_inference_steps: ${eval_num_inference_steps}
+      environment_seed: ${seed}
+      inference_seed: ${seed}
+      rand_device: cpu
+      compile_action_infer: false
+      binarize_gripper: true
+    training:
+      expected_windows: 12000
+      global_batch_size: 128
+      warmup_ratio: 0.05
+      cache_episodes: 8
+      keep_last_checkpoints: 3
+
+  stage2:
+    initial_adapter: null
+
+# Stage II consumes this section through the maintained Outcome-FPO runtime.
+outcome_fpo:
+  validate_only: false
+  num_epochs: 1
+  epoch_offset: 0
+  dataset_stats_path: ${two_stage_opsd.dataset_stats_path}
+
+  distributed:
+    num_processes: ${two_stage_opsd.distributed.num_processes}
+
+  split:
+    training_reference_manifest: ${two_stage_opsd.split.training_reference_manifest}
+    validation_manifest: ${two_stage_opsd.split.validation_manifest}
+
+  rollout:
+    suites: [libero_10]
+    task_ids: [7]
+    rollouts_per_task: 50
+    anchor_steps: [0, 80, 160, 240]
+    max_anchor_attempts: 3
+    schedule_seed: ${seed}
+    environment_seed: ${seed}
+    inference_seed: ${seed}
+    num_steps_wait: 30
+    action_horizon: ${eval:'${data.train.num_frames} - 1'}
+    replan_steps: 10
+    num_inference_steps: ${eval_num_inference_steps}
+    sigma_shift: null
+    rand_device: cpu
+    compile_action_infer: false
+    binarize_gripper: true
+    future_frame_steps: [0, 4, 8, 12, 16, 20, 24, 28, 32]
+
+  outcome:
+    type: frozen_nominal_video_hidden_cosine
+    layer_index: 19
+    reward_timestep: 500.0
+    num_video_frames: 9
+    num_inference_steps: ${eval_num_inference_steps}
+    sigma_shift: null
+
+  fpo:
+    group_size: 4
+    groups_per_global_update: 8
+    num_mc_samples: 8
+    mc_seed: ${seed}
+    loss_type: epsilon_mse
+    average_losses_before_exp: true
+    clipping_epsilon: 0.05
+    log_ratio_clip: 3.0
+    update_epochs: 2
+    advantage_type: leave_one_out_standardized
+    advantage_eps: 1.0e-6
+    advantage_clip: 5.0
+    minimum_reward_std: 1.0e-4
+    entropy_coefficient: 0.0
+    kl_coefficient: 0.0
+
+adapter:
+  initial_checkpoint: ${two_stage_opsd.stage2.initial_adapter}
+
+# Stage-II checkpoint controls; the launcher overrides optimizer fields below.
+save_every: 0
+max_checkpoints: 3
+
+hydra:
+  job:
+    chdir: false
+  run:
+    dir: .
+  output_subdir: null
