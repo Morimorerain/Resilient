@@ -644,9 +644,9 @@ Stage I 在 Fault 环境中，使用 Fast-WAM 基座从官方训练状态 0--49 
 样本包含 32 个实际执行动作、对应的归一化 proprio，以及 `0,4,...,32` 的双相机九帧。训练直接
 调用未修改的 `FastWAM.training_loss()`，video/action loss 权重均为 1。配置特意保持
 `model.video_dit_config.action_conditioned=false`：这里复用发布版 Fast-WAM 的 video--action 联合
-训练，不宣称存在显式的 Action-to-Video 因果通路。训练参数为 10 epoch、12,000 窗口、全局
-batch 128、AdamW `(0.9,0.95)`、学习率 `1e-4`、weight decay `1e-2`、5% warm-up 加 cosine、
-bf16、梯度范数 1.0。
+训练，不宣称存在显式的 Action-to-Video 因果通路。训练参数为 10 epoch、12,000 窗口、四卡
+每卡 micro-batch 8、梯度累积 4（全局 batch 128）、AdamW `(0.9,0.95)`、学习率 `1e-4`、
+weight decay `1e-2`、5% warm-up 加 cosine、bf16、梯度范数 1.0。
 
 Stage II 复用现有 Outcome-FPO。对同一批 50 个训练状态，当前 Student 在 Fault 下分别到达动作
 步 `0,80,160,240` 的四个因果 anchor。每个 anchor 从同一 simulator state 采样四个 32-action

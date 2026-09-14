@@ -696,8 +696,9 @@ contains 32 actions, the corresponding normalized proprioception, and dual-camer
 `0,4,...,32`. Training calls the unchanged `FastWAM.training_loss()` with equal video/action loss
 weights. It deliberately keeps `model.video_dit_config.action_conditioned=false`: this is the
 released Fast-WAM video--action joint training path, not an explicit Action-to-Video causal bridge.
-The recipe is 10 epochs, 12,000 windows, global batch 128, AdamW `(0.9,0.95)`, learning rate `1e-4`,
-weight decay `1e-2`, 5% warm-up plus cosine decay, bf16, and gradient norm 1.0.
+The recipe is 10 epochs, 12,000 windows, per-GPU micro-batch 8 on four GPUs, gradient accumulation
+4 (global batch 128), AdamW `(0.9,0.95)`, learning rate `1e-4`, weight decay `1e-2`, 5% warm-up plus
+cosine decay, bf16, and gradient norm 1.0.
 
 Stage II reuses the maintained Outcome-FPO implementation. For every one of the same 50 training
 states, the current Student visits four causal anchors at action steps `0,80,160,240` under the

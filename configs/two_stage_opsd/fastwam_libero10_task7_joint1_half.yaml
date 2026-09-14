@@ -20,13 +20,14 @@ model:
     action_conditioned: false
 
 # Stage-I native Fast-WAM optimization recipe.
-batch_size: 16
+# Four 48 GB GPUs require a smaller micro-batch than the upstream 8-GPU recipe.
+batch_size: 8
 num_workers: 0
 learning_rate: 1.0e-4
 weight_decay: 1.0e-2
 lr_scheduler_type: cosine
 num_epochs: 10
-gradient_accumulation_steps: 2
+gradient_accumulation_steps: 4
 mixed_precision: bf16
 max_grad_norm: 1.0
 log_every: 10
