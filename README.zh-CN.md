@@ -677,7 +677,7 @@ manifest，并在存在交集时拒绝运行。
 在恰好四张可见 GPU 上顺序跑完：
 
 ```bash
-CUDA_VISIBLE_DEVICES=4,5,6,7 \
+CUDA_VISIBLE_DEVICES=0,1,2,3 \
   bash scripts/resilient/run_two_stage_opsd.sh \
   runs/two_stage_opsd/libero10_task7_joint1_half_seed42
 ```

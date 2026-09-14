@@ -64,6 +64,9 @@ two_stage_opsd:
       compile_action_infer: false
       binarize_gripper: true
     training:
+      num_epochs: 10
+      # Text context is stored by collection; training does not keep T5 in VRAM.
+      load_text_encoder: false
       expected_windows: 12000
       global_batch_size: 128
       warmup_ratio: 0.05

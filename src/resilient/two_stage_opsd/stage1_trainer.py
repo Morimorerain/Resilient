@@ -30,7 +30,12 @@ from resilient.opsd.adapters import (
     load_adapter_state_dict,
 )
 
-from .common import resolve_project_path, resolved_config_hash, validate_fault_and_split
+from .common import (
+    collection_config_hash,
+    resolve_project_path,
+    resolved_config_hash,
+    validate_fault_and_split,
+)
 from .dataset import FaultRolloutWindowDataset
 
 
@@ -163,11 +168,15 @@ def run_stage1_training(cfg: DictConfig) -> Path:
         raise ValueError(
             "Local batch, world size, and accumulation do not match global_batch_size."
         )
-    if str(cfg.lr_scheduler_type) != "cosine" or int(cfg.num_epochs) != 10:
-        raise ValueError("Stage I intentionally matches Fast-WAM's cosine/10-epoch recipe.")
+    if str(cfg.lr_scheduler_type) != "cosine" or int(cfg.num_epochs) != int(
+        section.num_epochs
+    ):
+        raise ValueError("Global num_epochs must match Stage-I training.num_epochs.")
     if bool(cfg.model.video_dit_config.action_conditioned):
         raise ValueError("Stage I must keep released action_conditioned=false.")
-    if float(cfg.model.loss.lambda_video) != 1.0 or float(cfg.model.loss.lambda_action) != 1.0:
+    video_loss_weight = float(cfg.model.loss.get("lambda_video", 1.0))
+    action_loss_weight = float(cfg.model.loss.get("lambda_action", 1.0))
+    if video_loss_weight != 1.0 or action_loss_weight != 1.0:
         raise ValueError("Stage I keeps equal native video/action loss weights.")
 
     output_dir = resolve_project_path(cfg.output_dir) / "stage1"
@@ -178,7 +187,7 @@ def run_stage1_training(cfg: DictConfig) -> Path:
         / "dataset_manifest.json"
     )
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    if manifest["config_sha256"] != config_hash:
+    if manifest["config_sha256"] != collection_config_hash(cfg):
         raise ValueError("Collected Stage-I dataset configuration hash mismatch.")
     expected_windows = int(section.expected_windows)
     if int(manifest["window_count"]) != expected_windows:
@@ -204,7 +213,9 @@ def run_stage1_training(cfg: DictConfig) -> Path:
     )
 
     dtype = _mixed_precision_to_model_dtype(str(cfg.mixed_precision))
-    model = instantiate(cfg.model, model_dtype=dtype, device=str(accelerator.device))
+    model_config = OmegaConf.create(OmegaConf.to_container(cfg.model, resolve=True))
+    model_config.load_text_encoder = bool(section.load_text_encoder)
+    model = instantiate(model_config, model_dtype=dtype, device=str(accelerator.device))
     _load_model_checkpoint(model, str(resolve_project_path(cfg.ckpt)))
     adapter_cfg = FastWAMLoraConfig.from_config(OmegaConf.to_container(cfg.adapter, resolve=True))
     adapter_audit = inject_fastwam_aligned_lora(model, adapter_cfg)

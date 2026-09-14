@@ -36,8 +36,8 @@ from resilient.outcome_fpo.types import ActionConditioning
 from resilient.state_banks import state_fingerprint
 
 from .common import (
+    collection_config_hash,
     resolve_project_path,
-    resolved_config_hash,
     sha256_file,
     validate_fault_and_split,
 )
@@ -233,7 +233,7 @@ def collect_stage1_dataset(cfg: DictConfig) -> Path:
 
     dataset_dir = resolve_project_path(cfg.two_stage_opsd.stage1.dataset_dir)
     dataset_dir.mkdir(parents=True, exist_ok=True)
-    config_hash = resolved_config_hash(cfg)
+    config_hash = collection_config_hash(cfg)
     if accelerator.is_main_process:
         _write_json(
             dataset_dir / "collection_provenance.json",

@@ -48,6 +48,37 @@ def resolved_config_hash(cfg: DictConfig) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def collection_config_hash(cfg: DictConfig) -> str:
+    """Hash only settings that can change the generated Stage-I dataset."""
+    section = cfg.two_stage_opsd
+    payload = {
+        "schema_version": 1,
+        "checkpoint": str(cfg.ckpt),
+        "seed": int(cfg.seed),
+        "fault": OmegaConf.to_container(cfg.fault, resolve=True),
+        "task": OmegaConf.to_container(section.task, resolve=True),
+        "split": OmegaConf.to_container(section.split, resolve=True),
+        "dataset_stats_path": str(section.dataset_stats_path),
+        "collection": OmegaConf.to_container(
+            section.stage1.collection, resolve=True
+        ),
+        "data": {
+            "num_frames": int(cfg.data.train.num_frames),
+            "action_video_freq_ratio": int(cfg.data.train.action_video_freq_ratio),
+            "video_size": [int(value) for value in cfg.data.train.video_size],
+            "concat_multi_camera": str(cfg.data.train.concat_multi_camera),
+            "processor": OmegaConf.to_container(cfg.data.train.processor, resolve=True),
+        },
+        "model": {
+            "action_conditioned": bool(cfg.model.video_dit_config.action_conditioned),
+            "action_train_shift": float(cfg.model.action_scheduler.train_shift),
+            "video_train_shift": float(cfg.model.video_scheduler.train_shift),
+        },
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def validate_fault_and_split(cfg: DictConfig) -> dict[str, Any]:
     """Fail closed on the agreed single task, Fault, and disjoint state split."""
     section = cfg.two_stage_opsd
