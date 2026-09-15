@@ -1,4 +1,5 @@
 import csv
+import hashlib
 import json
 import os
 import subprocess
@@ -13,11 +14,13 @@ from typing import Any
 import hydra
 import yaml
 from hydra.core.hydra_config import HydraConfig
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SINGLE_ENTRY = PROJECT_ROOT / "experiments" / "robotwin" / "eval_robotwin_single.py"
-EVAL_STEP_LIMIT_FILE = PROJECT_ROOT / "third_party" / "RoboTwin" / "task_config" / "_eval_step_limit.yml"
+EVAL_STEP_LIMIT_FILE = (
+    PROJECT_ROOT / "third_party" / "RoboTwin" / "task_config" / "_eval_step_limit.yml"
+)
 TERMINATE_TIMEOUT_SEC = 10
 POLL_INTERVAL_SEC = 2
 
@@ -122,6 +125,24 @@ def _to_jsonable(value: float | None) -> float | None:
     return float(value)
 
 
+def _protocol_manifest(cfg: DictConfig, ckpt_path: Path) -> dict[str, Any]:
+    """Return result-affecting inputs while excluding scheduler-only settings."""
+    evaluation = OmegaConf.to_container(cfg.EVALUATION, resolve=True)
+    assert isinstance(evaluation, dict)
+    evaluation.pop("output_dir", None)
+    payload: dict[str, Any] = {
+        "schema_version": 1,
+        "checkpoint": str(ckpt_path),
+        "checkpoint_size": ckpt_path.stat().st_size,
+        "seed": int(cfg.seed),
+        "task_choice": HydraConfig.get().runtime.choices.get("task"),
+        "evaluation": evaluation,
+    }
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    payload["protocol_sha256"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return payload
+
+
 @dataclass
 class RunningState:
     task_name: str
@@ -146,13 +167,21 @@ def main(cfg: DictConfig):
     if not robotwin_root.exists():
         raise FileNotFoundError(f"RoboTwin root not found: {robotwin_root}")
 
-    num_gpus = int(cfg.MULTIRUN.num_gpus)
-    if num_gpus <= 0:
-        raise ValueError("`MULTIRUN.num_gpus` must be > 0.")
+    gpu_ids_cfg = cfg.MULTIRUN.get("gpu_ids")
+    if gpu_ids_cfg is None:
+        num_gpus = int(cfg.MULTIRUN.num_gpus)
+        if num_gpus <= 0:
+            raise ValueError("`MULTIRUN.num_gpus` must be > 0.")
+        gpu_ids = list(range(num_gpus))
+    else:
+        gpu_ids = [int(gpu_id) for gpu_id in gpu_ids_cfg]
+        if not gpu_ids:
+            raise ValueError("`MULTIRUN.gpu_ids` must not be empty when provided.")
+        if len(gpu_ids) != len(set(gpu_ids)) or min(gpu_ids) < 0:
+            raise ValueError(f"`MULTIRUN.gpu_ids` must contain unique non-negative IDs: {gpu_ids}")
     max_tasks_per_gpu = int(cfg.MULTIRUN.max_tasks_per_gpu)
     if max_tasks_per_gpu <= 0:
         raise ValueError("`MULTIRUN.max_tasks_per_gpu` must be > 0.")
-    gpu_ids = list(range(num_gpus))
 
     output_dir = _resolve_path(str(cfg.EVALUATION.output_dir), base=PROJECT_ROOT)
     run_ts = output_dir.name
@@ -165,6 +194,26 @@ def main(cfg: DictConfig):
     failed_tasks_file = run_output_dir / "failed_tasks.txt"
     summary_csv = run_output_dir / "summary.csv"
     summary_json = run_output_dir / "summary.json"
+    protocol_manifest_file = run_output_dir / "protocol_manifest.json"
+
+    protocol_manifest = _protocol_manifest(cfg, ckpt_path)
+    if protocol_manifest_file.exists():
+        previous_manifest = json.loads(protocol_manifest_file.read_text(encoding="utf-8"))
+        if previous_manifest.get("protocol_sha256") != protocol_manifest["protocol_sha256"]:
+            raise RuntimeError(
+                "Refusing to mix RoboTwin results produced by different protocols in "
+                f"{run_output_dir}. Choose a new EVALUATION.output_dir or restore "
+                "matching settings."
+            )
+    else:
+        protocol_manifest_file.write_text(
+            json.dumps(protocol_manifest, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    (run_output_dir / "resolved_config.yaml").write_text(
+        OmegaConf.to_yaml(cfg, resolve=True),
+        encoding="utf-8",
+    )
 
     task_name_cfg = cfg.EVALUATION.task_name
     if task_name_cfg is None or str(task_name_cfg).strip() == "":
@@ -178,13 +227,26 @@ def main(cfg: DictConfig):
         task: {"clean": None, "random": None} for task in tasks
     }
     failed_records: list[dict[str, Any]] = []
-    pending_tasks = deque(tasks)
+    pending_tasks: deque[tuple[str, str]] = deque()
     running_states: list[RunningState] = []
 
     phase_to_task_config = {
         "clean": "demo_clean",
         "random": "demo_randomized",
     }
+
+    if bool(cfg.MULTIRUN.resume_completed):
+        for task_name in tasks:
+            for phase in ("clean", "random"):
+                result_file = run_output_dir / task_name / _phase_result_filename(phase)
+                if result_file.exists():
+                    task_rates[task_name][phase] = _parse_success_rate(result_file)
+
+    for task_name in tasks:
+        if task_rates[task_name]["clean"] is None:
+            pending_tasks.append((task_name, "clean"))
+        elif task_rates[task_name]["random"] is None:
+            pending_tasks.append((task_name, "random"))
 
     def log(msg: str) -> None:
         line = f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {msg}"
@@ -254,8 +316,8 @@ def main(cfg: DictConfig):
 
     def try_launch_pending(gpu_id: int) -> None:
         while len(pending_tasks) > 0 and gpu_running_count(gpu_id) < max_tasks_per_gpu:
-            task_name = pending_tasks.popleft()
-            running_states.append(launch_phase(task_name=task_name, gpu_id=gpu_id, phase="clean"))
+            task_name, phase = pending_tasks.popleft()
+            running_states.append(launch_phase(task_name=task_name, gpu_id=gpu_id, phase=phase))
 
     def write_outputs() -> None:
         clean_mean = _mean_or_none([task_rates[t]["clean"] for t in tasks])
@@ -371,7 +433,7 @@ def main(cfg: DictConfig):
                 f"success_rate={success_rate:.4f}"
             )
 
-            if state.phase == "clean":
+            if state.phase == "clean" and task_rates[state.task_name]["random"] is None:
                 running_states.append(launch_phase(
                     task_name=state.task_name,
                     gpu_id=gpu_id,
@@ -388,11 +450,11 @@ def main(cfg: DictConfig):
 
     # Mark not started tasks when failure happened.
     if has_failure:
-        for task_name in pending_tasks:
+        for task_name, phase in pending_tasks:
             failed_records.append(
                 {
                     "task_name": task_name,
-                    "phase": "not_started",
+                    "phase": f"{phase}_not_started",
                     "gpu_id": -1,
                     "return_code": -1,
                     "reason": "aborted_not_started",

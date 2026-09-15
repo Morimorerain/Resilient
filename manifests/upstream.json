@@ -22,5 +22,18 @@
     "license": "Apache-2.0",
     "source_scope": "playground/src/flow_policy/fpo.py",
     "note": "The outcome-FPO objective is an independent PyTorch adaptation of the Apache-2.0 Playground implementation; MuJoCo and JAX runtime code is not vendored."
+  },
+  "robotwin": {
+    "repository": "https://github.com/RoboTwin-Platform/RoboTwin.git",
+    "commit": "bf44be51cf5717a5595ce59447f2cf5263d2aa95",
+    "license": "MIT",
+    "note": "Only the fixed vendored revision is supported for the FastWAM paper baseline. Do not replace it with the moving RoboTwin main branch."
+  },
+  "curobo": {
+    "repository": "https://github.com/NVlabs/curobo.git",
+    "commit": "0a50de1ba72db304195d59d9d0b1ed269696047f",
+    "tag": "v0.7.7",
+    "license": "NVIDIA non-commercial license",
+    "note": "This was the latest tagged CuRobo release before the pinned RoboTwin revision. Install as an external dependency; do not vendor or redistribute it."
   }
 }

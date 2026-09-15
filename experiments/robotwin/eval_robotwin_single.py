@@ -112,7 +112,8 @@ def _ensure_policy_symlink(robotwin_root: Path, policy_source_dir: Path) -> Path
     source_resolved = policy_source_dir.resolve()
 
     if not policy_target.exists() and not policy_target.is_symlink():
-        policy_target.symlink_to(source_resolved, target_is_directory=True)
+        relative_source = os.path.relpath(source_resolved, start=policy_target.parent)
+        policy_target.symlink_to(relative_source, target_is_directory=True)
         return policy_target
 
     if policy_target.is_symlink():
@@ -135,7 +136,7 @@ def _format_override_value(value: Any) -> str:
         return "True" if value else "False"
     if value is None:
         return "None"
-    if isinstance(value, (int, float)):
+    if isinstance(value, int | float):
         return str(value)
     return repr(str(value))
 
@@ -226,6 +227,7 @@ def main(cfg: DictConfig):
         "skip_get_obs_within_replan",
         cfg.EVALUATION.skip_get_obs_within_replan,
     )
+    _append_override(overrides, "eval_video_log", cfg.EVALUATION.save_videos)
 
     cmd = [
         sys.executable,
@@ -240,6 +242,9 @@ def main(cfg: DictConfig):
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = str(cfg.gpu_id)
     env["PYTHONUNBUFFERED"] = "1"
+    env.setdefault("DIFFSYNTH_MODEL_BASE_PATH", str(PROJECT_ROOT / "checkpoints"))
+    env.setdefault("DIFFSYNTH_DOWNLOAD_SOURCE", "modelscope")
+    env.setdefault("SAPIEN_RENDER_DEVICE", "cuda:0")
 
     with open(log_file, "w", encoding="utf-8") as log_f:
         process = subprocess.Popen(
@@ -260,7 +265,10 @@ def main(cfg: DictConfig):
         return_code = process.wait()
 
     if return_code != 0:
-        raise RuntimeError(f"RoboTwin evaluation failed with return code {return_code}. Log: {log_file}")
+        raise RuntimeError(
+            f"RoboTwin evaluation failed with return code {return_code}. "
+            f"Log: {log_file}"
+        )
 
     print(f"Evaluation finished successfully. Log saved to: {log_file}")
     OmegaConf.save(

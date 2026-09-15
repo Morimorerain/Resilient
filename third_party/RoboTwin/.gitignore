@@ -9,6 +9,9 @@ envs/curobo
 viewer_show.*
 eval_video/
 task_config/
+!task_config/
+!task_config/*.yml
+!task_config/create_task_config.sh
 **/.DS_Store
 
 # eval result

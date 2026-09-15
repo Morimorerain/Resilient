@@ -2,7 +2,7 @@
 
 [简体中文](README.zh-CN.md) | **English**
 
-Resilient is a reproducibility-first research codebase built on [FastWAM](https://github.com/yuantianyuan01/FastWAM) for LIBERO evaluation and follow-up research. The FastWAM baseline is integrated at the repository root because its Hydra configs and evaluation entry points use repository-relative paths.
+Resilient is a reproducibility-first research codebase built on [FastWAM](https://github.com/yuantianyuan01/FastWAM) for LIBERO and RoboTwin evaluation and follow-up research. The FastWAM baseline is integrated at the repository root because its Hydra configs and evaluation entry points use repository-relative paths.
 
 ## Current status
 
@@ -18,6 +18,8 @@ Resilient is a reproducibility-first research codebase built on [FastWAM](https:
   reusable YAML configurations, and aligned image/video demonstrations.
 - Outcome-Guided FPO for the simulator-owned joint-1 50% motion-retention Fault is implemented and
   covered by CPU/configuration tests; a real multi-GPU optimization smoke test is still pending.
+- The official RoboTwin checkpoint reproduction now has a pinned 50-task protocol, a separate
+  compatible environment, resumable physical-GPU scheduling, asset preflight, and paper reporting.
 
 ## Repository layout
 
@@ -25,16 +27,19 @@ Resilient is a reproducibility-first research codebase built on [FastWAM](https:
 Resilient/
 ├── configs/                       # Hydra configs, including Fault/OPSD/outcome-FPO parameters
 ├── experiments/libero/            # LIBERO evaluation plus a default-off Fault hook
+├── experiments/robotwin/          # Reused FastWAM RoboTwin policy and evaluators
 ├── src/fastwam/                   # Pinned FastWAM plus registered default-off patches
 ├── src/resilient/                 # Resilient extensions and adapters
 ├── scripts/resilient/             # Reproducible evaluation/download/verification tools
 ├── environment/                   # Environment specification, lock, and notes
 ├── manifests/                     # Pinned upstream and external asset metadata
 ├── reproduce/fastwam_libero/      # Minimal and full reproduction recipes
+├── reproduce/fastwam_robotwin/    # RoboTwin paper protocol and per-task reference
 ├── reports/baselines/             # Curated, small reproduction records
 ├── checkpoints/fastwam_release/   # Downloaded weights; ignored by Git
 ├── data/lerobot_v30/              # LIBERO LeRobot 3.0 data; ignored by Git
 ├── third_party/LIBERO/            # Pinned simulator checkout; ignored by Git
+├── third_party/RoboTwin/           # Pinned vendored RoboTwin evaluation code
 ├── runs/                          # Training outputs; ignored by Git
 ├── evaluate_results/              # Raw evaluation outputs; ignored by Git
 └── AILOG/WORKLOG.md                # Local Chinese work log; ignored by Git
@@ -50,7 +55,7 @@ Resilient/
 | GPU | NVIDIA GPU with BF16 support; at least 32 GB per worker recommended; 1 GPU works and 8 GPUs reproduce the parallel run | 8 × RTX 6000 Ada, 48 GB each; 24,728–25,593 MiB observed per worker |
 | NVIDIA driver | Compatible with CUDA 12.8 PyTorch wheels | 570.133.07 |
 | System memory | At least 128 GiB recommended for 8 workers; reduce the worker count on smaller hosts | 503 GiB; about 90 GiB used in a running snapshot |
-| Disk | At least 80 GB for environment, weights, Git LFS objects, dataset, and outputs | 695 GB free before setup |
+| Disk | At least 120 GB for both simulator environments, weights, assets, datasets, and outputs | 695 GB free before setup |
 
 Git LFS is required for the pinned Wan component download; version 3.6.1 was validated here.
 
@@ -62,10 +67,13 @@ The environment is split into synchronized specifications:
 
 - `.python-version` pins the validated Python runtime.
 - `requirements.txt` pins all FastWAM runtime dependencies, including the CUDA 12.8 PyTorch build.
+- `requirements-base.txt` contains dependencies shared by the LIBERO and RoboTwin profiles.
 - `requirements-libero.txt` pins the simulator-only LIBERO dependencies without downgrading FastWAM's current stack.
+- `requirements-robotwin*.txt` pin the NumPy-1.26 RoboTwin runtime and CuRobo build separately.
 - `requirements-dev.txt` adds development and test tools.
 - `environment/pip-freeze-cu128.txt` locks the validated direct and transitive package set.
 - `environment/environment.yml` provides an optional equivalent Conda bootstrap.
+- `environment/pip-freeze-robotwin-cu128.txt` locks the validated combined FastWAM/RoboTwin stack.
 
 ```bash
 uv python install 3.10.20
@@ -206,6 +214,101 @@ The run used seed 42, 10 inference steps, sigma shift 5.0, CFG 1.0, action compi
 ### Validated minimal result
 
 On 2026-09-04, `libero_spatial` task 0 completed successfully in its single episode with seed 42, 10 inference steps, sigma shift 5.0, action compilation enabled, and the released checkpoint. The rollout phase took 114.52 seconds including first-use TorchInductor compilation. See `reports/baselines/minimal-validation.json` for compact provenance. This is an integration check, not a statistically meaningful benchmark result.
+
+## Reproducing the RoboTwin baseline
+
+RoboTwin uses a separate environment because its pinned `mplib==0.2.1` requires NumPy below 2,
+while the LIBERO OpenCV profile requires NumPy 2. The validated combination keeps FastWAM at
+PyTorch 2.7.1/CUDA 12.8 and uses NumPy 1.26.4, SAPIEN 3.0.0b1, MPLib 0.2.1, Open3D 0.18.0,
+and the non-commercial CuRobo v0.7.7 revision recorded in `manifests/upstream.json`. Build CuRobo
+with the CUDA 12.8 toolkit; the host's `/usr/local/cuda` may point at a different toolkit.
+
+```bash
+bash scripts/resilient/create_robotwin_environment.sh .venv-robotwin
+source .venv-robotwin/bin/activate
+```
+
+The script installs `requirements-robotwin-build.txt`, `requirements-robotwin.txt`, and then the
+pinned `requirements-robotwin-curobo.txt` with build isolation disabled. To replay the validated
+complete package set, use `environment/pip-freeze-robotwin-cu128.txt`; CuRobo must still be built
+on the target GPU architecture with `RESILIENT_CUDA_HOME` pointing to CUDA 12.8.
+`environment/environment-robotwin.yml` is a Conda bootstrap for non-CuRobo packages; run the
+documented CuRobo step afterward.
+
+RoboTwin rendering additionally requires a working Vulkan runtime, `ffmpeg`, and an NVIDIA driver
+compatible with CUDA 12.8. Containers must expose graphics capability. The validated host uses
+8 RTX 6000 Ada GPUs with 48 GB each. Start with one model worker per GPU and measure memory before
+enabling two. The simulator is pinned to commit
+`bf44be51cf5717a5595ce59447f2cf5263d2aa95` under `third_party/RoboTwin`; do not replace it with
+the moving RoboTwin main branch. The retained upstream requirements file is provenance only and
+must not be installed because it conflicts with the FastWAM dependency profile.
+
+Download and verify the official model and simulator assets:
+
+```bash
+bash scripts/resilient/download_model_components.sh
+python scripts/resilient/download_robotwin_assets.py --component all
+python scripts/resilient/verify_robotwin.py --verify-hashes \
+  --output AILOG/robotwin-preflight.json
+```
+
+The first command installs the shared Wan VAE, text encoder, and tokenizer pinned in the global
+asset manifest. The RoboTwin downloader uses pinned revisions, stores its cache under ignored
+`AILOG/`, validates archive size and SHA-256 before safe extraction, and refuses to replace a
+non-empty asset tree. Expected RoboTwin-specific paths are:
+
+```text
+checkpoints/fastwam_release/robotwin_uncond_3cam_384.pt
+checkpoints/fastwam_release/robotwin_uncond_3cam_384_dataset_stats.json
+third_party/RoboTwin/assets/background_texture/
+third_party/RoboTwin/assets/embodiments/aloha-agilex/
+third_party/RoboTwin/assets/objects/
+```
+
+The checkpoint is 12,041,813,092 bytes with SHA-256
+`776475b22566a791854ecf31cf3b50f25e7d8d94c343132ec16eb94994aa9e63`; its 88,715-byte statistics
+file has SHA-256 `7a02c46cfc8c5e746c0afbe41fca73f723eda34cbc083f8ca54f76d8f7468095`.
+The [checkpoint repository](https://huggingface.co/yuanty/fastwam) and
+[RoboTwin asset repository](https://huggingface.co/datasets/TianxingChen/RoboTwin2.0) do not
+declare licenses, so do not redistribute these files. Simulator archive hashes are
+`background_texture.zip`: `54ede0fb5b783e0faa2bc98720d3affd6ca3bb9280b225b48c1aafaf31473070`,
+`embodiments.zip`: `6b87d7d55e106d8ff25917e0538eb1e177fc549280e8a742a8cec3cb9f953fc6`,
+and `objects.zip`: `6aa56b3cf1e1064f7c809308144da36b00815f8b137fef2d7e4de856f8becf27`.
+Their pinned revisions, sizes, and destinations are in `manifests/assets.json` and
+`third_party/RoboTwin/ASSETS.md`.
+The RoboTwin training dataset is not required for checkpoint evaluation.
+
+Run checks in increasing cost order, selecting only GPUs that are free at launch time:
+
+```bash
+# One task, one clean and one randomized episode.
+python scripts/resilient/evaluate_robotwin_baseline.py \
+  --mode smoke --gpu-ids 4 --task click_alarmclock
+
+# All 50 tasks, one episode per condition.
+python scripts/resilient/evaluate_robotwin_baseline.py \
+  --mode coverage --gpu-ids 4,5,6,7
+
+# Paper protocol: 50 tasks x (100 clean + 100 randomized) = 10,000 episodes.
+python scripts/resilient/evaluate_robotwin_baseline.py \
+  --mode paper --gpu-ids 4,5,6,7 --run-id fastwam_robotwin_paper
+```
+
+The launcher refuses selected GPUs with active compute processes unless explicitly overridden. It
+locks unseen instructions, a 32-action horizon, 24-step replanning, 10 flow steps, sigma shift 5.0,
+CFG 1.0, CPU action noise, and no Fault or adapter. Video logging defaults off because it does not
+affect control and 10,000 videos would consume substantial disk; pass `--save-videos` for debugging.
+Completed phases resume only when the stored protocol fingerprint matches. The evaluator resolves
+the shared Wan VAE, text encoder, and tokenizer from repository-relative `checkpoints/` through
+`DIFFSYNTH_MODEL_BASE_PATH`; an existing environment override still takes precedence. Each worker
+also sets `SAPIEN_RENDER_DEVICE=cuda:0` after exposing one physical GPU, preventing Vulkan from
+silently rendering on a different card. Leaving that variable unset preserves upstream behavior.
+
+Published FastWAM success is 91.88% clean, 91.78% randomized, and 91.8% displayed average.
+Appendix Table 3 is tracked in `reproduce/fastwam_robotwin/paper_reference.csv`. A paper run writes
+aggregate and per-task CSV, JSON, and Markdown comparisons with Wilson 95% intervals. Raw outputs
+remain ignored under `evaluate_results/robotwin/`. Detailed invariants are in
+`reproduce/fastwam_robotwin/README.md`.
 
 ## Reusable fault pipeline and evaluation
 

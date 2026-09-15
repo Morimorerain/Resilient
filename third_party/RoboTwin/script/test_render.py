@@ -63,7 +63,11 @@ class Sapien_TEST(gym.Env):
         from sapien.render import set_global_config
 
         set_global_config(max_num_materials=50000, max_num_textures=50000)
-        self.renderer = sapien.SapienRenderer()
+        render_device = os.environ.get("SAPIEN_RENDER_DEVICE")
+        if render_device:
+            self.renderer = sapien.SapienRenderer(device=sapien.Device(render_device))
+        else:
+            self.renderer = sapien.SapienRenderer()
         # give renderer to sapien sim
         self.engine.set_renderer(self.renderer)
 

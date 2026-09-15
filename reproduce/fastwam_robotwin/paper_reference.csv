@@ -1,0 +1,51 @@
+task_name,display_name,clean_percent,randomized_percent
+adjust_bottle,Adjust Bottle,100,100
+beat_block_hammer,Beat Block Hammer,99,97
+blocks_ranking_rgb,Blocks Ranking RGB,100,100
+blocks_ranking_size,Blocks Ranking Size,94,98
+click_alarmclock,Click Alarmclock,100,100
+click_bell,Click Bell,100,100
+dump_bin_bigbin,Dump Bin Bigbin,97,96
+grab_roller,Grab Roller,100,100
+handover_block,Handover Block,95,81
+handover_mic,Handover Mic,99,100
+lift_pot,Lift Pot,100,100
+move_can_pot,Move Can Pot,90,88
+move_playingcard_away,Move Playingcard Away,100,100
+move_stapler_pad,Move Stapler Pad,77,64
+hanging_mug,Hanging Mug,58,62
+open_laptop,Open Laptop,98,100
+open_microwave,Open Microwave,62,45
+pick_diverse_bottles,Pick Diverse Bottles,80,85
+pick_dual_bottles,Pick Dual Bottles,100,96
+place_a2b_left,Place A2B Left,95,93
+place_a2b_right,Place A2B Right,93,99
+place_bread_basket,Place Bread Basket,91,93
+place_bread_skillet,Place Bread Skillet,90,93
+place_can_basket,Place Can Basket,71,69
+place_cans_plasticbox,Place Cans Plasticbox,99,96
+place_container_plate,Place Container Plate,96,100
+place_dual_shoes,Place Dual Shoes,94,88
+place_empty_cup,Place Empty Cup,100,100
+place_fan,Place Fan,96,96
+place_burger_fries,Place Burger Fries,96,99
+place_mouse_pad,Place Mouse Pad,83,89
+place_object_basket,Place Object Basket,89,88
+place_object_scale,Place Object Scale,90,97
+place_object_stand,Place Object Stand,90,94
+place_phone_stand,Place Phone Stand,97,99
+move_pillbottle_pad,Move Pillbottle Pad,100,99
+place_shoe,Place Shoe,96,99
+press_stapler,Press Stapler,90,97
+put_bottles_dustbin,Put Bottles Dustbin,95,90
+put_object_cabinet,Put Object Cabinet,94,89
+rotate_qrcode,Rotate QRcode,93,89
+scan_object,Scan Object,89,92
+shake_bottle,Shake Bottle,100,100
+shake_bottle_horizontally,Shake Bottle Horizontally,100,100
+stack_blocks_three,Stack Blocks Three,95,97
+stack_blocks_two,Stack Blocks Two,100,100
+stack_bowls_three,Stack Bowls Three,80,81
+stack_bowls_two,Stack Bowls Two,92,98
+stamp_seal,Stamp Seal,90,94
+turn_switch,Turn Switch,61,59

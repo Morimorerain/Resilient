@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "resilient-fastwam"
 version = "0.2.0"
-description = "Reproducible FastWAM research on LIBERO."
+description = "Reproducible FastWAM research on LIBERO and RoboTwin."
 readme = "README.md"
 requires-python = ">=3.10,<3.11"
 dependencies = [
@@ -23,7 +23,7 @@ dependencies = [
   "jsonlines==4.0.0",
   "modelscope==1.34.0",
   "mujoco==3.3.2",
-  "numpy==2.2.6",
+  "numpy>=1.26.4,<2.3",
   "omegaconf==2.3.0",
   "packaging==25.0",
   "pandas==2.2.3",
@@ -54,6 +54,22 @@ libero = [
   "opencv-python==4.12.0.88",
   "robosuite==1.4.0",
 ]
+robotwin = [
+  "cython==3.1.3",
+  "gymnasium==0.29.1",
+  "h5py==3.14.0",
+  "mplib==0.2.1",
+  "ninja==1.13.0",
+  "nvidia-curobo @ git+https://github.com/NVlabs/curobo.git@0a50de1ba72db304195d59d9d0b1ed269696047f",
+  "numpy==1.26.4",
+  "open3d==0.18.0",
+  "opencv-python==4.10.0.84",
+  "sapien==3.0.0b1",
+  "scipy==1.10.1",
+  "toppra==0.6.3",
+  "transforms3d==0.4.2",
+  "trimesh==4.4.3",
+]
 
 [project.scripts]
 resilient = "resilient.__main__:main"
@@ -83,4 +99,5 @@ testpaths = ["tests"]
 markers = [
   "gpu: requires an NVIDIA GPU and the full FastWAM environment",
   "libero: requires the LIBERO simulator and assets",
+  "robotwin: requires the pinned RoboTwin simulator and assets",
 ]

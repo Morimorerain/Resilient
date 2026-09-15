@@ -33,6 +33,8 @@ EVALUATION:
   tiled: false
   timing_enabled: false
   skip_get_obs_within_replan: true
+  # Null preserves the task YAML. Set false to disable artifact-only video logging.
+  save_videos: null
 
   # Runtime inputs
   dataset_stats_path: null
@@ -41,7 +43,11 @@ EVALUATION:
 MULTIRUN:
   enabled: false
   num_gpus: 8
+  # Optional physical GPU IDs. Null preserves FastWAM's original 0..num_gpus-1 behavior.
+  gpu_ids: null
   max_tasks_per_gpu: 2
+  # Reuse only completed phase files under the same protocol fingerprint.
+  resume_completed: true
 
 hydra:
   job:

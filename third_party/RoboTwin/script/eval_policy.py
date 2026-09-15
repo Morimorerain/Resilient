@@ -121,6 +121,9 @@ def main(usr_args):
     with open(f"./task_config/{task_config}.yml", "r", encoding="utf-8") as f:
         args = yaml.load(f.read(), Loader=yaml.FullLoader)
 
+    if usr_args.get("eval_video_log") is not None:
+        args["eval_video_log"] = parse_bool(usr_args["eval_video_log"])
+
     args['task_name'] = task_name
     args["task_config"] = task_config
     args["ckpt_setting"] = ckpt_setting

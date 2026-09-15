@@ -1,6 +1,7 @@
 {
   "model_repository": {
     "id": "yuanty/fastwam",
+    "url": "https://huggingface.co/yuanty/fastwam",
     "revision": "8eaceeb24c3cc92ff2a9c9a9d266a4941b836705",
     "license": null,
     "license_note": "The Hugging Face model card does not declare a weight license; do not redistribute without clarification from the publisher."
@@ -29,6 +30,16 @@
       "path": "checkpoints/fastwam_release/libero_uncond_2cam224_dataset_stats.json",
       "size": 40939,
       "sha256": "30f81ad7d5076e97323e3328bce003e01a04cb21327b5bacd21bb72846768638"
+    },
+    {
+      "path": "checkpoints/fastwam_release/robotwin_uncond_3cam_384.pt",
+      "size": 12041813092,
+      "sha256": "776475b22566a791854ecf31cf3b50f25e7d8d94c343132ec16eb94994aa9e63"
+    },
+    {
+      "path": "checkpoints/fastwam_release/robotwin_uncond_3cam_384_dataset_stats.json",
+      "size": 88715,
+      "sha256": "7a02c46cfc8c5e746c0afbe41fca73f723eda34cbc083f8ca54f76d8f7468095"
     },
     {
       "path": "checkpoints/DiffSynth-Studio/Wan-Series-Converted-Safetensors/models_t5_umt5-xxl-enc-bf16.safetensors",
@@ -69,5 +80,34 @@
     "file_count": 46,
     "size": 4706213231,
     "snapshot_sha256": "fb0532da60ac971d785f9135d0f015746a105d4a768fb3ec0ba15399dea40e7b"
+  },
+  "robotwin_simulator_assets": {
+    "repository": "TianxingChen/RoboTwin2.0",
+    "url": "https://huggingface.co/datasets/TianxingChen/RoboTwin2.0",
+    "repository_type": "dataset",
+    "revision": "981c92aa34d8f94d4cff47e0d5bc2f7d4e0af042",
+    "license": null,
+    "license_note": "The dataset repository does not declare a license in its metadata; download for evaluation but do not redistribute.",
+    "install_root": "third_party/RoboTwin/assets",
+    "archives": [
+      {
+        "filename": "background_texture.zip",
+        "size": 10970687027,
+        "sha256": "54ede0fb5b783e0faa2bc98720d3affd6ca3bb9280b225b48c1aafaf31473070",
+        "expected_directory": "background_texture"
+      },
+      {
+        "filename": "embodiments.zip",
+        "size": 219859313,
+        "sha256": "6b87d7d55e106d8ff25917e0538eb1e177fc549280e8a742a8cec3cb9f953fc6",
+        "expected_directory": "embodiments"
+      },
+      {
+        "filename": "objects.zip",
+        "size": 3737778549,
+        "sha256": "6aa56b3cf1e1064f7c809308144da36b00815f8b137fef2d7e4de856f8becf27",
+        "expected_directory": "objects"
+      }
+    ]
   }
 }

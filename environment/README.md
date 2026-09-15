@@ -1,6 +1,6 @@
 # Environment contract
 
-The validated path uses uv `0.11.7` with a uv-managed standalone CPython. This prevents Conda base-library RPATHs from leaking into the environment.
+The validated path uses uv `0.11.7` with a uv-managed standalone CPython. This prevents Conda base-library RPATHs from leaking into the environment. LIBERO and RoboTwin use separate environments because their pinned NumPy/OpenCV/MPLib constraints are incompatible.
 
 ```bash
 uv python install 3.10.20
@@ -24,4 +24,19 @@ uv pip install --index-strategy unsafe-best-match \
 
 The lock snapshot excludes editable local packages. Install Resilient and the pinned LIBERO checkout separately as described in the root README. OPSD adapter support uses `peft==0.15.2`; it is part of every primary dependency declaration and the lock snapshot.
 
-`environment.yml` is an equivalent Conda bootstrap specification that installs the same two requirements files and the editable repository, but the uv path is the validated reference environment. Run `conda env create -f environment/environment.yml` from the repository root. Do not update packages interactively without updating `requirements.txt`, `requirements-libero.txt`, `pyproject.toml`, `pip-freeze-cu128.txt`, and both root README files. A hardware snapshot belongs in ignored `AILOG/` during development.
+For RoboTwin, use the reproducible helper rather than modifying the LIBERO environment:
+
+```bash
+bash scripts/resilient/create_robotwin_environment.sh .venv-robotwin
+source .venv-robotwin/bin/activate
+python scripts/resilient/verify_robotwin.py
+```
+
+The helper installs build tools first, then the NumPy-1.26 simulator profile, and finally builds
+CuRobo v0.7.7 with build isolation disabled. It defaults to `/usr/local/cuda-12.8` because the
+FastWAM wheel is `torch==2.7.1+cu128`; override this only with
+`RESILIENT_CUDA_HOME=/path/to/cuda-12.8`. `pip-freeze-robotwin-cu128.txt` is the validated complete
+snapshot. `environment-robotwin.yml` bootstraps the Conda packages but intentionally cannot perform
+the CuRobo no-build-isolation step; run the helper's final two commands afterward.
+
+`environment.yml` is an equivalent Conda bootstrap specification for LIBERO, but the uv path is the validated reference environment. Run `conda env create -f environment/environment.yml` from the repository root. Do not update packages interactively without updating the applicable `requirements*.txt`, `pyproject.toml`, lock snapshot, and both root README files. A hardware snapshot belongs in ignored `AILOG/` during development.

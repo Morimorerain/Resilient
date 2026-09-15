@@ -63,6 +63,20 @@ FastWAM is pinned in `manifests/upstream.json`. Project-specific behavior should
   complete 32-action alignment protocol and warn that its success rate is not the standard
   10-action-replanning benchmark result.
 
+## Optional RoboTwin Vulkan device selection
+
+- Affected files: `third_party/RoboTwin/script/test_render.py` and
+  `third_party/RoboTwin/envs/_base_task.py` (`setup_scene`).
+- Reason: SAPIEN enumerates Vulkan devices independently of CUDA's physical ordering. Without an
+  explicit device, a worker assigned through `CUDA_VISIBLE_DEVICES` can render on another physical
+  GPU and interfere with a different experiment.
+- Switch: environment variable `SAPIEN_RENDER_DEVICE`, unset by default. The Resilient RoboTwin
+  evaluator sets it to `cuda:0` after exposing exactly one physical GPU to each worker.
+- Baseline preservation: when the variable is unset, both sites call the original
+  `sapien.SapienRenderer()` constructor without arguments.
+- Coverage: RoboTwin preflight verifies the Vulkan loader, and the documented single-task smoke
+  checks renderer construction before the official policy evaluator starts.
+
 For every future patch, record:
 
 - affected upstream file and function;

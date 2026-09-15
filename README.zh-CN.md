@@ -2,7 +2,7 @@
 
 **简体中文** | [English](README.md)
 
-Resilient 是一个以可复现性为首要目标、基于 [FastWAM](https://github.com/yuantianyuan01/FastWAM) 开展 LIBERO 评测和后续研究的代码库。由于 FastWAM 的 Hydra 配置和评测入口依赖仓库相对路径，上游代码直接整合在仓库根目录。
+Resilient 是一个以可复现性为首要目标、基于 [FastWAM](https://github.com/yuantianyuan01/FastWAM) 开展 LIBERO、RoboTwin 评测和后续研究的代码库。由于 FastWAM 的 Hydra 配置和评测入口依赖仓库相对路径，上游代码直接整合在仓库根目录。
 
 ## 当前状态
 
@@ -18,6 +18,8 @@ Resilient 是一个以可复现性为首要目标、基于 [FastWAM](https://git
   时间对齐的图像/视频演示。
 - 面向仿真器级第一关节 50% 运动保留 Fault 的 Outcome-Guided FPO 已完成实现及 CPU/配置测试；
   尚未进行真实多卡优化烟测。
+- 官方 RoboTwin checkpoint 复现现已具备固定的50任务协议、独立兼容环境、可续跑的物理GPU
+  调度、资产预检和论文对比报告工具。
 
 ## 仓库结构
 
@@ -25,16 +27,19 @@ Resilient 是一个以可复现性为首要目标、基于 [FastWAM](https://git
 Resilient/
 ├── configs/                       # Hydra 配置，包含 Fault/OPSD/outcome-FPO 参数
 ├── experiments/libero/            # LIBERO 评测及默认关闭的 Fault hook
+├── experiments/robotwin/          # 复用的 FastWAM RoboTwin 策略与评测器
 ├── src/fastwam/                   # 固定 FastWAM 及已登记的默认关闭补丁
 ├── src/resilient/                 # Resilient 扩展与适配器
 ├── scripts/resilient/             # 可复现的评测、下载与验证工具
 ├── environment/                   # 环境规范、锁文件与说明
 ├── manifests/                     # 上游及外部资产固定信息
 ├── reproduce/fastwam_libero/      # 最小与完整复现入口
+├── reproduce/fastwam_robotwin/    # RoboTwin 论文协议和逐任务参考结果
 ├── reports/baselines/             # 精简、可提交的复现记录
 ├── checkpoints/fastwam_release/   # 下载权重，不上传 Git
 ├── data/lerobot_v30/              # LIBERO LeRobot 3.0 数据，不上传 Git
 ├── third_party/LIBERO/            # 固定版本的仿真器源码，不上传 Git
+├── third_party/RoboTwin/           # 固定版本的 RoboTwin 评测代码
 ├── runs/                          # 训练输出，不上传 Git
 ├── evaluate_results/              # 原始评测输出，不上传 Git
 └── AILOG/WORKLOG.md                # 本地中文工作日志，不上传 Git
@@ -50,7 +55,7 @@ Resilient/
 | GPU | 支持 BF16 的 NVIDIA GPU；建议每个 worker 至少 32 GB；1 张可运行，8 张复现本次并行评测 | 8 × RTX 6000 Ada，每张 48 GB；每个 worker 实测 24,728–25,593 MiB |
 | NVIDIA 驱动 | 兼容 CUDA 12.8 PyTorch wheel | 570.133.07 |
 | 系统内存 | 8 个 worker 建议至少 128 GiB；内存较小时减少 worker 数 | 503 GiB；运行中一次快照约使用 90 GiB |
-| 磁盘 | 环境、权重、Git LFS 对象、数据与输出合计至少 80 GB | 配置前可用约 695 GB |
+| 磁盘 | 两套仿真环境、权重、资产、数据与输出合计至少 120 GB | 配置前可用约 695 GB |
 
 固定版本下载 Wan 公共组件需要 Git LFS；本次验证版本为 3.6.1。
 
@@ -62,10 +67,13 @@ FastWAM 默认启动 8 个持久化 LIBERO worker。完整评测时可通过 `MU
 
 - `.python-version` 固定已验证的 Python 运行时。
 - `requirements.txt` 固定全部 FastWAM 运行依赖，包括 CUDA 12.8 版 PyTorch。
+- `requirements-base.txt` 保存 LIBERO 与 RoboTwin 共用的 FastWAM 依赖。
 - `requirements-libero.txt` 固定仅供 LIBERO 仿真使用的依赖，避免降级 FastWAM 当前依赖栈。
+- `requirements-robotwin*.txt` 分别固定 NumPy 1.26 的 RoboTwin 运行依赖和 CuRobo 构建依赖。
 - `requirements-dev.txt` 增加开发和测试工具。
 - `environment/pip-freeze-cu128.txt` 锁定本次验证的全部直接与传递依赖。
 - `environment/environment.yml` 提供等价的可选 Conda 引导规范。
+- `environment/pip-freeze-robotwin-cu128.txt` 锁定已验证的 FastWAM/RoboTwin 组合环境。
 
 ```bash
 uv python install 3.10.20
@@ -206,6 +214,94 @@ NUM_GPUS=8 bash reproduce/fastwam_libero/evaluate_full.sh
 ### 已验证的最小结果
 
 2026-09-04 使用发布 checkpoint，在 seed 42、10 个推理步、sigma shift 5.0、启用动作编译的设置下，`libero_spatial` 第 0 个任务单回合成功。rollout 阶段含首次 TorchInductor 编译共用时 114.52 秒。精简来源信息见 `reports/baselines/minimal-validation.json`。该结果仅为集成检查，不具有统计意义。
+
+## 复现 RoboTwin 基线
+
+RoboTwin 使用独立环境：固定的 `mplib==0.2.1` 要求 NumPy 小于2，而 LIBERO 的 OpenCV
+环境要求 NumPy 2。已验证组合保持 FastWAM 为 PyTorch 2.7.1/CUDA 12.8，并使用 NumPy
+1.26.4、SAPIEN 3.0.0b1、MPLib 0.2.1、Open3D 0.18.0，以及
+`manifests/upstream.json` 中固定的、仅限非商业用途的 CuRobo v0.7.7。编译 CuRobo 时必须
+选择 CUDA 12.8 toolkit；主机的 `/usr/local/cuda` 可能指向其他版本。
+
+```bash
+bash scripts/resilient/create_robotwin_environment.sh .venv-robotwin
+source .venv-robotwin/bin/activate
+```
+
+脚本依次安装 `requirements-robotwin-build.txt`、`requirements-robotwin.txt`，再关闭构建隔离
+安装固定的 `requirements-robotwin-curobo.txt`。如需重建完整依赖，可使用
+`environment/pip-freeze-robotwin-cu128.txt`；CuRobo 仍需针对目标 GPU 架构重新编译，并通过
+`RESILIENT_CUDA_HOME` 指向 CUDA 12.8。`environment/environment-robotwin.yml` 是不包含
+CuRobo 编译步骤的 Conda 引导文件，之后仍需运行上述 CuRobo 安装步骤。
+
+RoboTwin 渲染还需要可用的 Vulkan runtime、`ffmpeg` 和兼容 CUDA 12.8 的 NVIDIA 驱动；
+容器必须开放 graphics capability。已验证机器为8张48 GB RTX 6000 Ada。实测之前每张卡只
+启动一个模型 worker。仿真器源码固定为 `third_party/RoboTwin` 下的 commit
+`bf44be51cf5717a5595ce59447f2cf5263d2aa95`，禁止替换为持续变化的 RoboTwin main 分支。
+目录内保留的上游 requirements 只用于来源审计，不能直接安装，否则会破坏 FastWAM 依赖。
+
+下载并校验官方模型和仿真资产：
+
+```bash
+bash scripts/resilient/download_model_components.sh
+python scripts/resilient/download_robotwin_assets.py --component all
+python scripts/resilient/verify_robotwin.py --verify-hashes \
+  --output AILOG/robotwin-preflight.json
+```
+
+第一条命令安装全局资产清单中固定的共用 Wan VAE、文本编码器和 tokenizer。RoboTwin 下载工具
+固定 revision，将缓存放入被忽略的 `AILOG/`，解压前核对大小和 SHA-256，并拒绝替换已有非空
+资产目录。RoboTwin 专用目标布局为：
+
+```text
+checkpoints/fastwam_release/robotwin_uncond_3cam_384.pt
+checkpoints/fastwam_release/robotwin_uncond_3cam_384_dataset_stats.json
+third_party/RoboTwin/assets/background_texture/
+third_party/RoboTwin/assets/embodiments/aloha-agilex/
+third_party/RoboTwin/assets/objects/
+```
+
+checkpoint 大小为12,041,813,092字节，SHA-256 为
+`776475b22566a791854ecf31cf3b50f25e7d8d94c343132ec16eb94994aa9e63`；统计文件大小为
+88,715字节，SHA-256 为 `7a02c46cfc8c5e746c0afbe41fca73f723eda34cbc083f8ca54f76d8f7468095`。
+[checkpoint 仓库](https://huggingface.co/yuanty/fastwam)和
+[RoboTwin 资产仓库](https://huggingface.co/datasets/TianxingChen/RoboTwin2.0)均未声明许可证，
+因此不得再分发。三个仿真资产压缩包的 SHA-256 分别为：`background_texture.zip`
+`54ede0fb5b783e0faa2bc98720d3affd6ca3bb9280b225b48c1aafaf31473070`、`embodiments.zip`
+`6b87d7d55e106d8ff25917e0538eb1e177fc549280e8a742a8cec3cb9f953fc6`、`objects.zip`
+`6aa56b3cf1e1064f7c809308144da36b00815f8b137fef2d7e4de856f8becf27`。固定 revision、大小和
+目标目录记录在 `manifests/assets.json` 与 `third_party/RoboTwin/ASSETS.md`。checkpoint 评测
+不需要 RoboTwin 训练数据集。
+
+按成本逐级运行，并只选择启动时空闲的 GPU：
+
+```bash
+# 单任务，clean/randomized各1回合。
+python scripts/resilient/evaluate_robotwin_baseline.py \
+  --mode smoke --gpu-ids 4 --task click_alarmclock
+
+# 50任务，clean/randomized各1回合。
+python scripts/resilient/evaluate_robotwin_baseline.py \
+  --mode coverage --gpu-ids 4,5,6,7
+
+# 论文协议：50任务 x（100 clean + 100 randomized）= 10,000回合。
+python scripts/resilient/evaluate_robotwin_baseline.py \
+  --mode paper --gpu-ids 4,5,6,7 --run-id fastwam_robotwin_paper
+```
+
+启动器默认拒绝带活跃计算进程的目标 GPU。它固定 unseen instruction、32步 action horizon、
+24步重规划、10步 flow、sigma shift 5.0、CFG 1.0、CPU动作噪声，并关闭 Fault 和 adapter。
+视频默认关闭，因为它不影响控制且10,000个视频会大量占用磁盘；调试时可传 `--save-videos`。
+只有 protocol fingerprint 完全一致时才会续跑已完成 phase。评测器通过
+`DIFFSYNTH_MODEL_BASE_PATH` 从仓库相对的 `checkpoints/` 解析共用 Wan VAE、文本编码器和
+tokenizer；若外部环境已显式设置该变量，则以外部设置为准。每个 worker 在只暴露一张物理卡
+后还会设置 `SAPIEN_RENDER_DEVICE=cuda:0`，避免 Vulkan 静默使用另一张卡；不设置该变量时
+仍保持 RoboTwin 上游行为。
+
+论文结果为 clean 91.88%、randomized 91.78%、展示平均值91.8%。完整附录表3位于
+`reproduce/fastwam_robotwin/paper_reference.csv`。论文评测会自动输出总体和逐任务 CSV、JSON、
+Markdown 对比及 Wilson 95%区间。原始结果位于被 Git 忽略的
+`evaluate_results/robotwin/`；详细协议约束见 `reproduce/fastwam_robotwin/README.md`。
 
 ## 可复用 Fault 管线与评测
 

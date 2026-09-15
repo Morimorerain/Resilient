@@ -1,0 +1,7 @@
+# Build dependencies that must exist before installing RoboTwin packages with
+# disabled build isolation. CuRobo extensions must use the CUDA toolkit matching
+# the PyTorch wheel selected in requirements-base.txt.
+cython==3.1.3
+ninja==1.13.0
+setuptools==75.8.0
+wheel==0.46.3
