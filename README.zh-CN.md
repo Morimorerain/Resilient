@@ -848,6 +848,7 @@ ruff check src/resilient tests scripts/resilient
 - 记录 Git SHA、上游 SHA、命令、Hydra 覆盖参数、随机种子、硬件、环境、资产版本/校验值和结果。
 - 依赖变化时同步更新环境文件和中英文 README。
 - 数据集、checkpoint、仿真资产、缓存、视频、日志和原始实验结果不得上传 Git。
+- Hydra 作业只向标准输出写日志，因此不会在仓库根目录重复生成 `*.log`。需要长期保留的控制台日志应重定向到已忽略的 `AILOG/` 路径或文档指定的单次运行结果目录。
 - 源码和代码注释使用英文；`README.md` 使用英文；`README.zh-CN.md` 使用简体中文；被忽略的 `AILOG/WORKLOG.md` 使用中文。
 
 ## 上游与许可证

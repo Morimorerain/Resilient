@@ -912,6 +912,7 @@ Delete one-off debug scripts and outputs after use. Durable GPU/LIBERO checks be
 - Record Git SHA, upstream SHA, commands, Hydra overrides, seeds, hardware, environment, asset revisions/checksums, and results.
 - Update the environment files and both README versions whenever a dependency changes.
 - Keep datasets, checkpoints, simulator assets, caches, videos, logs, and raw experiment outputs out of Git.
+- Hydra job logging is stdout-only, so jobs do not create duplicate `*.log` files in the repository root. Redirect durable console logs to ignored `AILOG/` paths or the documented per-run result directory.
 - Use English for source code and code comments. Maintain `README.md` in English, `README.zh-CN.md` in Simplified Chinese, and the ignored `AILOG/WORKLOG.md` in Chinese.
 
 ## Upstream and license
