@@ -12,6 +12,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from .assets import validate_materialized_planner_config
 from .protocol import load_paper_references, load_task_limits, validate_task_universe
 
 
@@ -72,11 +73,21 @@ def _check_file(
     return CheckResult(relative_path, True, "present" if not verify_hashes else "hash verified")
 
 
-def _check_package(distribution_name: str) -> CheckResult:
+def _check_package(
+    distribution_name: str,
+    *,
+    expected_version: str | None = None,
+) -> CheckResult:
     try:
         version = importlib.metadata.version(distribution_name)
     except importlib.metadata.PackageNotFoundError:
         return CheckResult(f"package:{distribution_name}", False, "not installed")
+    if expected_version is not None and version != expected_version:
+        return CheckResult(
+            f"package:{distribution_name}",
+            False,
+            f"version {version} != required {expected_version}",
+        )
     return CheckResult(f"package:{distribution_name}", True, version)
 
 
@@ -127,6 +138,8 @@ def run_preflight(
     required_asset_paths = {
         "assets/background_texture": "directory",
         "assets/embodiments/aloha-agilex/config.yml": "file",
+        "assets/embodiments/aloha-agilex/curobo_left.yml": "file",
+        "assets/embodiments/aloha-agilex/curobo_right.yml": "file",
         "assets/objects/objaverse/list.json": "file",
     }
     for relative_path, path_type in required_asset_paths.items():
@@ -134,6 +147,17 @@ def run_preflight(
         present = path.is_dir() if path_type == "directory" else path.is_file()
         detail = f"{path_type} present" if present else f"missing {path_type}"
         results.append(CheckResult(f"robotwin:{relative_path}", present, detail))
+
+    for filename in ("curobo_left.yml", "curobo_right.yml"):
+        path = robotwin_root / "assets" / "embodiments" / "aloha-agilex" / filename
+        error = validate_materialized_planner_config(path, robotwin_root)
+        results.append(
+            CheckResult(
+                f"robotwin:materialized:{filename}",
+                error is None,
+                "generated for current checkout" if error is None else error,
+            )
+        )
 
     stats_path = project_root / required_files[1]
     if stats_path.is_file():
@@ -157,6 +181,7 @@ def run_preflight(
             "nvidia-curobo",
         ):
             results.append(_check_package(package))
+        results.append(_check_package("warp-lang", expected_version="1.12.0"))
         for executable in ("ffmpeg",):
             resolved = shutil.which(executable)
             results.append(

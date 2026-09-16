@@ -219,8 +219,9 @@ NUM_GPUS=8 bash reproduce/fastwam_libero/evaluate_full.sh
 
 RoboTwin 使用独立环境：固定的 `mplib==0.2.1` 要求 NumPy 小于2，而 LIBERO 的 OpenCV
 环境要求 NumPy 2。已验证组合保持 FastWAM 为 PyTorch 2.7.1/CUDA 12.8，并使用 NumPy
-1.26.4、SAPIEN 3.0.0b1、MPLib 0.2.1、Open3D 0.18.0，以及
-`manifests/upstream.json` 中固定的、仅限非商业用途的 CuRobo v0.7.7。编译 CuRobo 时必须
+1.26.4、SAPIEN 3.0.0b1、MPLib 0.2.1、Open3D 0.18.0、Warp 1.12.0，以及
+`manifests/upstream.json` 中固定的、仅限非商业用途的 CuRobo v0.7.7。该 CuRobo 版本仍调用
+已在 Warp 1.13 删除的 `warp.torch` API，因此必须将 Warp 固定为1.12.0。编译 CuRobo 时必须
 选择 CUDA 12.8 toolkit；主机的 `/usr/local/cuda` 可能指向其他版本。
 
 ```bash
@@ -260,6 +261,10 @@ third_party/RoboTwin/assets/background_texture/
 third_party/RoboTwin/assets/embodiments/aloha-agilex/
 third_party/RoboTwin/assets/objects/
 ```
+
+官方 embodiment 压缩包中的 CuRobo planner 文件以 `*_tmp.yml` 模板形式提供。下载器会在
+安装后按照当前 `third_party/RoboTwin` 路径生成机器本地的 `.yml` 文件；仓库迁移后必须重新
+执行 simulator 下载命令。预检会拒绝缺失的 planner 配置以及由其他 checkout 路径生成的配置。
 
 checkpoint 大小为12,041,813,092字节，SHA-256 为
 `776475b22566a791854ecf31cf3b50f25e7d8d94c343132ec16eb94994aa9e63`；统计文件大小为

@@ -13,3 +13,6 @@ license; use the files for evaluation and do not redistribute them without publi
 
 Run `scripts/resilient/download_robotwin_assets.py --component simulator`. Archives are retained
 under the ignored `downloads/robotwin/` directory, verified before extraction, and never committed.
+The downloader also renders the archive's `*_tmp.yml` CuRobo planner templates into machine-local
+`.yml` files using the current `third_party/RoboTwin` path. Re-run the downloader after moving the
+checkout; the preflight rejects missing templates and files generated for another checkout.

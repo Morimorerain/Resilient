@@ -184,7 +184,7 @@ urllib3==2.7.0
 vcs-versioning==2.2.2
 vhacdx==0.0.10
 wandb==0.23.1
-warp-lang==1.17.0
+warp-lang==1.12.0
 wcwidth==0.8.3
 werkzeug==3.1.8
 wheel==0.46.3

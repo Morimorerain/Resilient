@@ -220,8 +220,10 @@ On 2026-09-04, `libero_spatial` task 0 completed successfully in its single epis
 RoboTwin uses a separate environment because its pinned `mplib==0.2.1` requires NumPy below 2,
 while the LIBERO OpenCV profile requires NumPy 2. The validated combination keeps FastWAM at
 PyTorch 2.7.1/CUDA 12.8 and uses NumPy 1.26.4, SAPIEN 3.0.0b1, MPLib 0.2.1, Open3D 0.18.0,
-and the non-commercial CuRobo v0.7.7 revision recorded in `manifests/upstream.json`. Build CuRobo
-with the CUDA 12.8 toolkit; the host's `/usr/local/cuda` may point at a different toolkit.
+Warp 1.12.0, and the non-commercial CuRobo v0.7.7 revision recorded in
+`manifests/upstream.json`. This CuRobo revision still calls the `warp.torch` API removed in Warp
+1.13, so Warp must remain pinned to 1.12.0. Build CuRobo with the CUDA 12.8 toolkit; the host's
+`/usr/local/cuda` may point at a different toolkit.
 
 ```bash
 bash scripts/resilient/create_robotwin_environment.sh .venv-robotwin
@@ -264,6 +266,11 @@ third_party/RoboTwin/assets/background_texture/
 third_party/RoboTwin/assets/embodiments/aloha-agilex/
 third_party/RoboTwin/assets/objects/
 ```
+
+The official embodiment archive stores CuRobo planner files as `*_tmp.yml` templates. The
+downloader renders their machine-local `.yml` counterparts with the current checkout path after
+installation. Re-run the simulator download command after moving the repository; the preflight
+rejects missing planner configs and configs generated for a different checkout.
 
 The checkpoint is 12,041,813,092 bytes with SHA-256
 `776475b22566a791854ecf31cf3b50f25e7d8d94c343132ec16eb94994aa9e63`; its 88,715-byte statistics

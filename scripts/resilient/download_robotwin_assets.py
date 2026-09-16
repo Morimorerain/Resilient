@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import shutil
+import sys
 import tempfile
 import zipfile
 from pathlib import Path, PurePosixPath
@@ -15,6 +16,12 @@ from typing import Any
 from huggingface_hub import hf_hub_download
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+SRC_ROOT = PROJECT_ROOT / "src"
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
+
+from resilient.robotwin.assets import materialize_embodiment_configs  # noqa: E402
+
 MANIFEST_PATH = PROJECT_ROOT / "manifests" / "assets.json"
 HUGGINGFACE_CACHE = PROJECT_ROOT / "AILOG" / "huggingface-cache"
 
@@ -134,6 +141,9 @@ def _download_simulator_assets(manifest: dict[str, Any], *, install: bool) -> No
         print(f"verified: {archive_path.relative_to(PROJECT_ROOT)}")
         if install:
             _install_archive(archive_path, entry, install_root)
+    if install:
+        rendered = materialize_embodiment_configs(install_root.parent)
+        print(f"materialized {len(rendered)} embodiment planner configs")
 
 
 def main() -> int:

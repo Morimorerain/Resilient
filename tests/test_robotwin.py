@@ -7,6 +7,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from resilient.robotwin.assets import (
+    materialize_embodiment_configs,
+    validate_materialized_planner_config,
+)
 from resilient.robotwin.protocol import (
     PAPER_PROTOCOL,
     load_paper_references,
@@ -27,6 +31,35 @@ TASK_LIMITS = (
 
 
 class RobotwinProtocolTests(unittest.TestCase):
+    def test_materializes_machine_local_curobo_configs(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            robotwin_root = Path(temp_dir) / "RoboTwin"
+            embodiment = robotwin_root / "assets" / "embodiments" / "aloha-agilex"
+            embodiment.mkdir(parents=True)
+            template = embodiment / "curobo_left_tmp.yml"
+            template.write_text(
+                "urdf_path: ${ASSETS_PATH}/assets/embodiments/robot.urdf\n",
+                encoding="utf-8",
+            )
+
+            rendered = materialize_embodiment_configs(robotwin_root)
+
+            target = embodiment / "curobo_left.yml"
+            self.assertEqual(rendered, [target])
+            self.assertIn(str(robotwin_root.resolve()), target.read_text(encoding="utf-8"))
+            self.assertIn("${ASSETS_PATH}", template.read_text(encoding="utf-8"))
+            self.assertIsNone(validate_materialized_planner_config(target, robotwin_root))
+
+    def test_rejects_planner_config_from_a_different_checkout(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config = root / "curobo.yml"
+            config.write_text("urdf_path: /old/checkout/assets/robot.urdf\n", encoding="utf-8")
+            self.assertEqual(
+                validate_materialized_planner_config(config, root / "RoboTwin"),
+                "was generated for a different RoboTwin checkout",
+            )
+
     def test_external_asset_manifest_is_pinned(self) -> None:
         manifest = json.loads(
             (PROJECT_ROOT / "manifests" / "assets.json").read_text(encoding="utf-8")

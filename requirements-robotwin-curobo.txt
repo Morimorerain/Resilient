@@ -1,4 +1,6 @@
 # Install after requirements-robotwin-build.txt and requirements-robotwin.txt.
 # Build isolation must be disabled and CUDA_HOME must select CUDA 12.8 so the
 # extensions match torch==2.7.1+cu128.
+# CuRobo v0.7.7 still calls warp.torch.*, which was removed in Warp 1.13.
+warp-lang==1.12.0
 nvidia-curobo @ git+https://github.com/NVlabs/curobo.git@0a50de1ba72db304195d59d9d0b1ed269696047f
