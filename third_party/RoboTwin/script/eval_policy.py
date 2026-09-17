@@ -124,6 +124,14 @@ def main(usr_args):
     if usr_args.get("eval_video_log") is not None:
         args["eval_video_log"] = parse_bool(usr_args["eval_video_log"])
 
+    fault_config = usr_args.get("fault_config")
+    if fault_config is not None and str(fault_config).strip() != "":
+        sim_cfg_path = usr_args.get("sim_cfg_path")
+        if sim_cfg_path is None or str(sim_cfg_path).strip() == "":
+            raise ValueError("sim_cfg_path is required when fault_config is enabled")
+        args["fault_config"] = str(fault_config)
+        args["sim_cfg_path"] = str(sim_cfg_path)
+
     args['task_name'] = task_name
     args["task_config"] = task_config
     args["ckpt_setting"] = ckpt_setting
@@ -265,6 +273,28 @@ def eval_policy(task_name,
     clear_cache_freq = args["clear_cache_freq"]
 
     args["eval_mode"] = True
+    fault_config = args.get("fault_config")
+    fault_controller = None
+
+    def detach_faults():
+        nonlocal fault_controller
+        if fault_controller is not None:
+            fault_controller.detach()
+            fault_controller = None
+
+    def install_faults():
+        nonlocal fault_controller
+        if fault_config is None or str(fault_config).strip() == "":
+            return
+        project_root = Path(str(args["sim_cfg_path"])).resolve().parents[1]
+        src_root = project_root / "src"
+        if str(src_root) not in sys.path:
+            sys.path.insert(0, str(src_root))
+        from resilient.robotwin.faults import install_fault_pipeline
+
+        fault_controller = install_fault_pipeline(TASK_ENV, str(fault_config))
+        if fault_controller is not None:
+            print("Installed RoboTwin simulator Faults:", fault_controller.metadata())
 
     while succ_seed < test_num:
         render_freq = args["render_freq"]
@@ -272,6 +302,7 @@ def eval_policy(task_name,
 
         if expert_check:
             try:
+                detach_faults()
                 TASK_ENV.setup_demo(now_ep_num=now_id, seed=now_seed, is_test=True, **args)
                 episode_info = TASK_ENV.play_once()
                 TASK_ENV.close_env()
@@ -305,7 +336,9 @@ def eval_policy(task_name,
         args["render_freq"] = render_freq
 
         try:
+            detach_faults()
             TASK_ENV.setup_demo(now_ep_num=now_id, seed=now_seed, is_test=True, **args)
+            install_faults()
         except UnStableError as e:
             # This seed passed expert_check but failed during rollout env init.
             # Roll back the accepted-seed counter and skip to next seed.
@@ -397,6 +430,7 @@ def eval_policy(task_name,
             print("\033[91mFail!\033[0m")
 
         now_id += 1
+        detach_faults()
         TASK_ENV.close_env(clear_cache=((succ_seed + 1) % clear_cache_freq == 0))
 
         if TASK_ENV.render_freq:

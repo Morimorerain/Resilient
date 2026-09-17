@@ -1,0 +1,26 @@
+pipeline:
+  id: robotwin_catalog_v1_camera_rotation_severe
+  enabled: true
+  seed: 42
+  faults:
+    - id: head_camera_rotation
+      family: visual.camera_pose
+      enabled: true
+      target: head_camera
+      operation: {type: local_axis_rotation, axis: z, direction: positive}
+      severity: {name: rotation_angle, value: 45.0, unit: degree, level: severe}
+      parameters: {position_offset: [0.0, 0.0, 0.0]}
+    - id: left_wrist_rotation
+      family: visual.camera_pose
+      enabled: true
+      target: left_camera
+      operation: {type: local_axis_rotation, axis: z, direction: positive}
+      severity: {name: rotation_angle, value: 45.0, unit: degree, level: severe}
+      parameters: {position_offset: [0.0, 0.0, 0.0]}
+    - id: right_wrist_rotation
+      family: visual.camera_pose
+      enabled: true
+      target: right_camera
+      operation: {type: local_axis_rotation, axis: z, direction: positive}
+      severity: {name: rotation_angle, value: 45.0, unit: degree, level: severe}
+      parameters: {position_offset: [0.0, 0.0, 0.0]}

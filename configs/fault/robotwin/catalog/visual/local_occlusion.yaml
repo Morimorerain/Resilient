@@ -1,0 +1,23 @@
+pipeline:
+  id: robotwin_catalog_v4_local_occlusion_severe
+  enabled: true
+  seed: 42
+  faults:
+    - id: three_camera_ink_occlusion
+      family: visual.local_occlusion
+      enabled: true
+      targets: [head_camera, left_camera, right_camera]
+      operation: {type: ink_spots}
+      severity: {name: largest_spot_diameter, value: 0.44, unit: ratio, level: severe}
+      parameters:
+        color_rgb: [4, 1, 7]
+        feather_px: 4.0
+        spots:
+          - {center: [0.46, 0.43], radius: 0.22, opacity: 0.98}
+          - {center: [0.67, 0.58], radius: 0.14, opacity: 0.96}
+          - {center: [0.30, 0.67], radius: 0.11, opacity: 0.94}
+          - {center: [0.73, 0.28], radius: 0.075, opacity: 0.90}
+          - {center: [0.21, 0.31], radius: 0.065, opacity: 0.88}
+          - {center: [0.82, 0.76], radius: 0.045, opacity: 0.82}
+          - {center: [0.16, 0.82], radius: 0.035, opacity: 0.78}
+          - {center: [0.87, 0.48], radius: 0.025, opacity: 0.72}

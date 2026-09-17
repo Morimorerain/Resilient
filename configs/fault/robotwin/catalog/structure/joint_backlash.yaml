@@ -1,0 +1,14 @@
+pipeline:
+  id: robotwin_catalog_e3_joint_backlash_visible
+  enabled: true
+  seed: 42
+  faults:
+    - id: left_joint1_backlash
+      family: structure.joint_backlash
+      enabled: true
+      targets: [left_arm_joint1]
+      operation: {type: reversal_dead_travel}
+      severity: {name: backlash_gap, value: 6.0, unit: degree, level: severe}
+      parameters:
+        gap_deg: 6.0
+        direction_epsilon_rad: 1.0e-7

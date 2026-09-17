@@ -130,6 +130,7 @@ def _protocol_manifest(cfg: DictConfig, ckpt_path: Path) -> dict[str, Any]:
     evaluation = OmegaConf.to_container(cfg.EVALUATION, resolve=True)
     assert isinstance(evaluation, dict)
     evaluation.pop("output_dir", None)
+    fault_config_value = evaluation.pop("fault_config", None)
     payload: dict[str, Any] = {
         "schema_version": 1,
         "checkpoint": str(ckpt_path),
@@ -138,6 +139,14 @@ def _protocol_manifest(cfg: DictConfig, ckpt_path: Path) -> dict[str, Any]:
         "task_choice": HydraConfig.get().runtime.choices.get("task"),
         "evaluation": evaluation,
     }
+    if fault_config_value is not None and str(fault_config_value).strip():
+        fault_config_path = _resolve_path(str(fault_config_value), base=PROJECT_ROOT)
+        if not fault_config_path.is_file():
+            raise FileNotFoundError(f"RoboTwin Fault config not found: {fault_config_path}")
+        payload["fault_config"] = {
+            "configured_path": str(fault_config_value),
+            "sha256": hashlib.sha256(fault_config_path.read_bytes()).hexdigest(),
+        }
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     payload["protocol_sha256"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
     return payload

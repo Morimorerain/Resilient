@@ -77,6 +77,28 @@ FastWAM is pinned in `manifests/upstream.json`. Project-specific behavior should
 - Coverage: RoboTwin preflight verifies the Vulkan loader, and the documented single-task smoke
   checks renderer construction before the official policy evaluator starts.
 
+## Optional RoboTwin simulator Fault installation
+
+- Affected files: `third_party/RoboTwin/script/eval_policy.py`, `configs/sim_robotwin.yaml`, and
+  `experiments/robotwin/eval_robotwin_single.py`.
+- Reason: each official evaluation episode destroys and recreates its SAPIEN scene, robot, and
+  cameras inside the upstream evaluator. A Fault adapter must therefore be attached after
+  `setup_demo()` and detached before scene disposal; a policy-side transform would not model a
+  simulator-owned embodied Fault.
+- Switch: `EVALUATION.fault_config`, default `null`. A configured YAML is installed only for the
+  policy rollout; the expert feasibility check remains nominal so Fault runs use the same accepted
+  scene distribution as the baseline. The launcher forwards both the resolved Fault YAML and the
+  simulator-config path into the task arguments only when this switch is enabled.
+- Baseline preservation: with the default null value the evaluator does not import, construct, or
+  call any Resilient Fault adapter. The original observation and articulation paths are unchanged.
+- Injection layers: camera pose Faults modify SAPIEN camera extrinsics; optical Faults wrap the
+  environment camera-sensor return; embodied Faults wrap `Robot.set_arm_joints()` immediately
+  before SAPIEN articulation drive targets are written. Implementations live in
+  `src/resilient/robotwin/faults.py` and reuse the shared Fault definitions.
+- Coverage: `tests/test_robotwin_faults.py` checks the disabled path, camera restoration, nested
+  sensor observations, left/right target resolution, actuator transforms, state restoration, and
+  the default-null Hydra switch.
+
 For every future patch, record:
 
 - affected upstream file and function;

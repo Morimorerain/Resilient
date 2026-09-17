@@ -1,0 +1,15 @@
+pipeline:
+  id: robotwin_catalog_e5_periodic_joint_freeze_severe
+  enabled: true
+  seed: 42
+  faults:
+    - id: left_joint1_periodic_gear_stick
+      family: structure.periodic_joint_freeze
+      enabled: true
+      targets: [left_arm_joint1]
+      operation: {type: angular_periodic_stick}
+      severity: {name: freeze_duration, value: 50, unit: control_steps, level: severe}
+      parameters:
+        period_deg: 10.0
+        phase_deg: 5.0
+        release_fraction: 0.25

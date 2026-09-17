@@ -35,6 +35,8 @@ EVALUATION:
   skip_get_obs_within_replan: true
   # Null preserves the task YAML. Set false to disable artifact-only video logging.
   save_videos: null
+  # Optional simulator-owned Fault YAML. Null preserves the pinned RoboTwin baseline.
+  fault_config: null
 
   # Runtime inputs
   dataset_stats_path: null

@@ -78,3 +78,49 @@ def compose_visual_fault_grid(
     for panel, position in zip(panels, positions, strict=True):
         canvas.paste(panel, position)
     return np.asarray(canvas)
+
+
+def compose_multi_camera_fault_grid(
+    nominal_images: Mapping[str, Any],
+    faulted_images: Mapping[str, Any],
+    *,
+    camera_order: list[str] | tuple[str, ...],
+    fault_label: str,
+    title: str = "Multi-camera visual Fault comparison",
+    panel_size: tuple[int, int] = (384, 288),
+) -> np.ndarray:
+    """Compose nominal and faulted rows for an ordered multi-camera simulator."""
+    cameras = tuple(str(camera) for camera in camera_order)
+    if not cameras or len(set(cameras)) != len(cameras):
+        raise ValueError("camera_order must contain unique camera names.")
+    missing = [
+        camera
+        for camera in cameras
+        if camera not in nominal_images or camera not in faulted_images
+    ]
+    if missing:
+        raise KeyError(f"Visual comparison is missing cameras: {missing}.")
+    width, height = (int(panel_size[0]), int(panel_size[1]))
+    if width <= 0 or height <= 0:
+        raise ValueError("panel_size must contain positive width and height.")
+    title_height = 52
+    canvas = Image.new(
+        "RGB",
+        (width * len(cameras), height * 2 + title_height),
+        color=(16, 16, 16),
+    )
+    draw = ImageDraw.Draw(canvas)
+    draw.text((10, 10), title, fill=(255, 255, 255), font=_font(20))
+    fault_lines = [part.strip() for part in fault_label.split("|")]
+    for column, camera in enumerate(cameras):
+        nominal = Image.fromarray(np.asarray(nominal_images[camera], dtype=np.uint8)).resize(
+            (width, height), resample=Image.Resampling.BILINEAR
+        )
+        faulted = Image.fromarray(np.asarray(faulted_images[camera], dtype=np.uint8)).resize(
+            (width, height), resample=Image.Resampling.BILINEAR
+        )
+        nominal_panel = annotate_image(nominal, ["NOMINAL", camera])
+        faulted_panel = annotate_image(faulted, ["FAULT", camera, *fault_lines])
+        canvas.paste(nominal_panel, (column * width, title_height))
+        canvas.paste(faulted_panel, (column * width, title_height + height))
+    return np.asarray(canvas)

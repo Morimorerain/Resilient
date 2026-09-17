@@ -1,0 +1,11 @@
+pipeline:
+  id: robotwin_catalog_v3_defocus_blur_severe
+  enabled: true
+  seed: 42
+  faults:
+    - id: three_camera_defocus
+      family: visual.defocus_blur
+      enabled: true
+      targets: [head_camera, left_camera, right_camera]
+      operation: {type: gaussian_blur}
+      severity: {name: gaussian_sigma, value: 8.0, unit: pixel, level: severe}

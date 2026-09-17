@@ -11,7 +11,13 @@ from typing import Any
 from ..base import FaultContext, FaultRuntime
 from ..types import SeveritySpec
 
-SUPPORTED_CAMERAS = ("agentview", "robot0_eye_in_hand")
+SUPPORTED_CAMERAS = (
+    "agentview",
+    "robot0_eye_in_hand",
+    "head_camera",
+    "left_camera",
+    "right_camera",
+)
 SUPPORTED_AXES = ("x", "y", "z")
 
 
@@ -274,7 +280,7 @@ class CameraPoseFaultRuntime(FaultRuntime):
                 "rotation_frame": "camera_local",
                 "rotation_order": "xyz",
             },
-            "injection_layer": "mujoco_camera_extrinsics",
+            "injection_layer": "simulator_camera_extrinsics",
         }
         return payload
 

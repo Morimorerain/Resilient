@@ -310,9 +310,9 @@ Markdown 对比及 Wilson 95%区间。原始结果位于被 Git 忽略的
 
 ## 可复用 Fault 管线与评测
 
-> **项目核心接口：**所有 Fault 都在创建 LIBERO 仿真器时安装到 `FaultedEnvironment`。
-> Fast-WAM、FPO、OPSD 及后续任意策略只使用不变的环境 API，不包含具体 Fault 实现。因此同一
-> YAML 可以直接复用于评测、训练、shadow rollout 和多 Fault 联合实验。
+> **项目核心接口：**Fault 在创建仿真器时通过 LIBERO `FaultedEnvironment` 或 RoboTwin
+> SAPIEN 适配器安装。Fast-WAM、FPO、OPSD 及后续任意策略均不包含具体 Fault 实现。因此相同
+> family 的实现可以复用于评测、训练、shadow rollout 和多 Fault 联合实验。
 
 Fault 定义是 `configs/fault/` 下与模型解耦的 YAML。创建环境时，
 `get_libero_env(..., fault_pipeline=pipeline)` 会将启用的 pipeline 安装到透明的
@@ -387,6 +387,46 @@ action 只有失效 joint1 对应维度非零，其余六个机械臂关节命�
 `catalog_manifest.json`；子集运行写入
 `catalog_manifest__<selected-ids>.json`，不会覆盖全量 manifest。默认输出目录和 JSON 摘要属于
 生成物，继续由 Git 忽略。
+
+### RoboTwin 十类 Fault 与双臂演示
+
+RoboTwin 复用相同的 Fault family 注册实现和数学变换。单独放在
+`configs/fault/robotwin/catalog/` 下的配置只负责适配物理目标名：三个相机
+（`head_camera`、`left_camera`、`right_camera`）和两条六自由度 ALOHA 机械臂。V1/V2 修改
+SAPIEN 相机 entity 位姿；V3--V5 在环境相机传感器返回层生效；E1--E5 在
+`Robot.set_arm_joints()` 内、写入 SAPIEN articulation drive target 前变换目标。任何 Fault
+都不作用于 Fast-WAM action tensor 或模型预处理层。
+
+具身 Fault 的规范目标为 `left_arm_joint1`--`left_arm_joint6` 与
+`right_arm_joint1`--`right_arm_joint6`，也可以使用无歧义的 SAPIEN 原始关节名。每个有状态
+Fault 项只应作用于一条机械臂；如需双臂同时损坏，应组合两个 Fault 项，使回差和周期冻结状态
+相互独立。官方评测开关为 `EVALUATION.fault_config`，默认 `null` 时不会导入或调用适配器，
+完整保留固定论文基线。expert 可解性检查保持正常仿真；Fault 只在每次 SAPIEN scene 创建后
+安装到 policy rollout。
+
+一次生成五张带标注的2×3正常/Fault三相机图，以及每个具身 Fault 的左臂、右臂两段视频：
+
+```bash
+CUDA_VISIBLE_DEVICES=0 SAPIEN_RENDER_DEVICE=cuda:0 \
+python scripts/resilient/demonstrate_robotwin_fault_catalog.py \
+  --catalog configs/fault/robotwin/demo_catalog.yaml \
+  --faults all \
+  --output-root evaluate_results/robotwin/fault_catalog
+```
+
+每段具身对比均从同一恢复后的 SAPIEN 状态开始，只移动标注机械臂的 joint 1，其他关节固定，
+正常与 Fault 时间轴完全一致。已提交的演示目录使用 RoboTwin 全局 observer 相机，使两条机械臂
+及其运动差异均保持可见；回差与周期卡钝包含方向反转。输出和 manifest 位于被忽略的
+`evaluate_results/robotwin/fault_catalog/`。通过维护的官方 checkpoint 启动器评测一个 Fault：
+
+```bash
+python scripts/resilient/evaluate_robotwin_baseline.py \
+  --mode smoke --gpu-ids 0 --task click_alarmclock \
+  --fault-config configs/fault/robotwin/catalog/structure/joint_motion_degradation.yaml
+```
+
+解析后的 Fault 路径和 SHA-256 会进入运行协议指纹，避免续跑时混入不同 Fault 定义生成的结果。
+具体公式、后端语义、目标别名和扩展规则见 `configs/fault/README.md`。
 
 已提交的相机示例为 `configs/fault/visual/wrist_camera_local_z.yaml`。用 4 卡评测默认的手腕相机
 绕局部 +Z 轴 30 度：

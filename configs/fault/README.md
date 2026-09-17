@@ -27,7 +27,7 @@ fault keeps one severity record per component instead of inventing a dimensionle
 
 ## Implemented catalog
 
-The ten severe, demonstration-oriented pipelines are under `catalog/`; they are normal pipeline
+The ten severe, demonstration-oriented LIBERO pipelines are under `catalog/`; they are normal pipeline
 files and can be passed directly to evaluation or training. `demo_catalog.yaml` only adds the
 task, initial state, render settings, controller, and deterministic action phases used to visualize
 them. Embodiment entries use `JOINT_POSITION` with only the target joint command nonzero.
@@ -75,6 +75,45 @@ python scripts/resilient/demonstrate_fault_catalog.py --faults all
 ```
 
 The default output is `evaluate_results/fault_catalog/` and is intentionally ignored by Git.
+
+## RoboTwin backend and dual-arm targets
+
+RoboTwin reuses the same registered Fault families and numerical transforms through the SAPIEN
+adapter in `resilient.robotwin.faults`. Simulator-specific YAML files live under
+`robotwin/catalog/` because RoboTwin has three cameras and two arms rather than LIBERO's two
+cameras and one Panda arm. Faults remain below the policy:
+
+- V1/V2 modify the SAPIEN camera entity pose; wrist offsets are reapplied after every kinematic
+  wrist-camera update.
+- V3--V5 transform RGB returned by RoboTwin's environment-owned camera sensor before the
+  observation leaves `Base_Task.get_obs()`.
+- E1--E5 transform the selected SAPIEN articulation drive target inside
+  `Robot.set_arm_joints()`, immediately before the physics simulator receives it.
+
+RoboTwin writes absolute drive targets. Its E3 adapter therefore retains the nominal and applied
+target history and feeds successive command increments into the shared backlash kernel; this
+preserves the configured reverse dead travel instead of consuming it from the full target error in
+one update. This adapter history is included in `RoboTwinFaultController.state_dict()` for exact
+continuation.
+
+Use `left_arm_joint1` through `left_arm_joint6` and `right_arm_joint1` through
+`right_arm_joint6` as embodiment-independent ALOHA aliases. Exact, unambiguous simulator joint
+names are also accepted. One stateful Fault entry must target only one arm; compose two entries to
+damage both arms so backlash and periodic-freeze histories remain independent. The five committed
+embodiment files default to left joint 1 and can be switched to the right arm by changing `targets`.
+
+Generate five annotated nominal/Fault three-camera grids and two time-aligned videos (left and
+right affected arm) for every embodiment Fault:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 SAPIEN_RENDER_DEVICE=cuda:0 \
+python scripts/resilient/demonstrate_robotwin_fault_catalog.py --faults all
+```
+
+Outputs default to ignored `evaluate_results/robotwin/fault_catalog/`. The visual rows contain
+`head_camera`, `left_camera`, and `right_camera`; embodiment videos show the same timeline and
+command on nominal/Fault simulators through the global observer camera, label the affected arm,
+and report joint-1 and end-effector divergence.
 
 Implement a new plugin by subclassing `resilient.faults.FaultRuntime` and registering its factory
 with `register_fault`. Use only the hooks needed by that fault; hooks are invoked by the

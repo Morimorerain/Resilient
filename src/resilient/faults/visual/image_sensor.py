@@ -18,6 +18,7 @@ CAMERA_OBSERVATION_KEYS = {
     "agentview": "agentview_image",
     "robot0_eye_in_hand": "robot0_eye_in_hand_image",
 }
+ROBOTWIN_CAMERA_TARGETS = frozenset({"head_camera", "left_camera", "right_camera"})
 
 
 def _as_targets(config: Mapping[str, Any]) -> tuple[str, ...]:
@@ -30,7 +31,8 @@ def _as_targets(config: Mapping[str, Any]) -> tuple[str, ...]:
         raise TypeError("Image-sensor fault requires target or targets.")
     if not targets or len(set(targets)) != len(targets):
         raise ValueError("Image-sensor targets must be a non-empty unique list.")
-    unknown = sorted(set(targets) - set(CAMERA_OBSERVATION_KEYS))
+    supported = set(CAMERA_OBSERVATION_KEYS) | set(ROBOTWIN_CAMERA_TARGETS)
+    unknown = sorted(set(targets) - supported)
     if unknown:
         raise ValueError(f"Unsupported camera sensor targets: {unknown}.")
     return targets
@@ -91,10 +93,22 @@ class ImageSensorFaultRuntime(FaultRuntime):
         if not isinstance(observation, Mapping):
             raise TypeError(f"{self.family} expects a mapping observation.")
         for camera in self.targets:
-            key = CAMERA_OBSERVATION_KEYS[camera]
-            if key not in observation:
-                raise KeyError(f"Observation does not contain camera key {key!r}.")
-            observation[key] = self.apply_image(np.asarray(observation[key]))
+            if camera in CAMERA_OBSERVATION_KEYS:
+                key = CAMERA_OBSERVATION_KEYS[camera]
+                if key not in observation:
+                    raise KeyError(f"Observation does not contain camera key {key!r}.")
+                observation[key] = self.apply_image(np.asarray(observation[key]))
+                continue
+
+            sensor_observation = observation.get("observation")
+            if not isinstance(sensor_observation, Mapping) or camera not in sensor_observation:
+                raise KeyError(f"RoboTwin observation does not contain camera {camera!r}.")
+            camera_observation = sensor_observation[camera]
+            if not isinstance(camera_observation, Mapping) or "rgb" not in camera_observation:
+                raise KeyError(f"RoboTwin camera {camera!r} does not contain an RGB frame.")
+            camera_observation["rgb"] = self.apply_image(
+                np.asarray(camera_observation["rgb"])
+            )
         return observation
 
     def apply_image(self, image: np.ndarray) -> np.ndarray:

@@ -79,12 +79,26 @@ def main() -> int:
     parser.add_argument("--run-id")
     parser.add_argument("--max-tasks-per-gpu", type=int, default=1)
     parser.add_argument("--save-videos", action="store_true")
+    parser.add_argument(
+        "--fault-config",
+        type=Path,
+        help="Optional simulator-owned Fault YAML; omitted for the paper baseline.",
+    )
     parser.add_argument("--allow-busy-gpus", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
     if args.max_tasks_per_gpu <= 0:
         parser.error("--max-tasks-per-gpu must be positive")
+    fault_config = None
+    if args.fault_config is not None:
+        fault_config = (
+            args.fault_config.resolve()
+            if args.fault_config.is_absolute()
+            else (PROJECT_ROOT / args.fault_config).resolve()
+        )
+        if not fault_config.is_file():
+            parser.error(f"Fault config does not exist: {fault_config}")
     preflight = run_preflight(PROJECT_ROOT, verify_hashes=False, require_runtime=True)
     if not preflight["passed"]:
         for check in preflight["checks"]:
@@ -130,6 +144,8 @@ def main() -> int:
     ]
     if task_name is not None:
         command.append(f"EVALUATION.task_name={task_name}")
+    if fault_config is not None:
+        command.append(f"EVALUATION.fault_config={fault_config}")
 
     print("Command:")
     print(" ".join(command))

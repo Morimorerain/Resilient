@@ -228,6 +228,14 @@ def main(cfg: DictConfig):
         cfg.EVALUATION.skip_get_obs_within_replan,
     )
     _append_override(overrides, "eval_video_log", cfg.EVALUATION.save_videos)
+    fault_config_path = _resolve_optional_path(
+        cfg.EVALUATION.fault_config,
+        base=PROJECT_ROOT,
+    )
+    if fault_config_path is not None:
+        if not fault_config_path.is_file():
+            raise FileNotFoundError(f"RoboTwin Fault config not found: {fault_config_path}")
+        _append_override(overrides, "fault_config", str(fault_config_path))
 
     cmd = [
         sys.executable,

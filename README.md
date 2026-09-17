@@ -319,10 +319,10 @@ remain ignored under `evaluate_results/robotwin/`. Detailed invariants are in
 
 ## Reusable fault pipeline and evaluation
 
-> **Core project interface:** all Faults are installed in `FaultedEnvironment` when the LIBERO
-> simulator is created. Fast-WAM, FPO, OPSD, and any later policy use the unchanged environment
-> API and contain no Fault-specific implementation. The same YAML can therefore be reused for
-> evaluation, training, shadow rollouts, or compound-Fault experiments.
+> **Core project interface:** Faults are installed at simulator construction through the LIBERO
+> `FaultedEnvironment` or the RoboTwin SAPIEN adapter. Fast-WAM, FPO, OPSD, and any later policy
+> contain no Fault-specific implementation. The same family implementations can therefore be
+> reused for evaluation, training, shadow rollouts, or compound-Fault experiments.
 
 Fault definitions are model-independent YAML files under `configs/fault/`. At environment
 construction, `get_libero_env(..., fault_pipeline=pipeline)` installs an enabled pipeline into a
@@ -403,6 +403,52 @@ arm-joint command dimensions remain zero. The motion phases are explicit in
 An all-Fault run writes `catalog_manifest.json`; a subset uses
 `catalog_manifest__<selected-ids>.json`, so it cannot overwrite the full manifest. The default
 output root and its JSON summaries are generated artifacts and remain ignored by Git.
+
+### RoboTwin ten-Fault catalog and dual-arm demonstrations
+
+RoboTwin reuses the same registered Fault families and mathematical transforms. Its separate
+configs under `configs/fault/robotwin/catalog/` only adapt physical target names: three cameras
+(`head_camera`, `left_camera`, `right_camera`) and two six-DoF ALOHA arms. V1/V2 mutate SAPIEN
+camera entity poses; V3--V5 operate at the environment camera-sensor return; E1--E5 transform
+SAPIEN articulation drive targets inside `Robot.set_arm_joints()`. No Fault is applied to a
+Fast-WAM action tensor or model preprocessing layer.
+
+Canonical embodied targets are `left_arm_joint1`--`left_arm_joint6` and
+`right_arm_joint1`--`right_arm_joint6`. Exact unambiguous SAPIEN joint names are also accepted.
+Keep one stateful Fault entry on one arm and compose two entries when both arms should be damaged,
+so backlash and periodic-freeze histories remain independent. The official evaluator switch is
+`EVALUATION.fault_config`; its default is `null`, which does not import or invoke the adapter and
+therefore preserves the pinned paper baseline. The nominal expert feasibility check remains
+Fault-free; the selected Fault is installed only for the policy rollout after each SAPIEN scene is
+created.
+
+Generate five annotated 2 x 3 nominal/Fault camera grids and left-arm plus right-arm videos for
+each of the five embodiment Faults:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 SAPIEN_RENDER_DEVICE=cuda:0 \
+python scripts/resilient/demonstrate_robotwin_fault_catalog.py \
+  --catalog configs/fault/robotwin/demo_catalog.yaml \
+  --faults all \
+  --output-root evaluate_results/robotwin/fault_catalog
+```
+
+Every embodiment comparison starts from one restored SAPIEN state, moves only joint 1 of the
+named arm, holds all other arm joints fixed, and uses an identical frame timeline. The committed
+demo catalog uses RoboTwin's global observer camera so both arms and their divergence remain
+visible. Backlash and periodic stick include direction reversals. Outputs and manifests are generated under the ignored
+`evaluate_results/robotwin/fault_catalog/` tree. Evaluate one Fault with the official checkpoint
+through the maintained launcher, for example:
+
+```bash
+python scripts/resilient/evaluate_robotwin_baseline.py \
+  --mode smoke --gpu-ids 0 --task click_alarmclock \
+  --fault-config configs/fault/robotwin/catalog/structure/joint_motion_degradation.yaml
+```
+
+The resolved Fault path and SHA-256 participate in the run protocol fingerprint, preventing
+resume from mixing outputs produced by different Fault definitions. Exact formulas, backend
+semantics, target aliases, and extension rules are in `configs/fault/README.md`.
 
 The committed camera example is `configs/fault/visual/wrist_camera_local_z.yaml`. Evaluate its
 default +30 degree severity on four GPUs with:

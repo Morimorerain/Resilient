@@ -1,0 +1,70 @@
+schema_version: 1
+defaults:
+  task_name: click_alarmclock
+  task_config: demo_clean
+  seed: 200000
+  fps: 20
+  physics_steps_per_frame: 12
+  camera_order: [head_camera, left_camera, right_camera]
+  embodiment_camera: observer_camera
+
+entries:
+  - id: V1_camera_rotation
+    kind: visual
+    fault_config: configs/fault/robotwin/catalog/visual/camera_rotation.yaml
+  - id: V2_camera_translation
+    kind: visual
+    fault_config: configs/fault/robotwin/catalog/visual/camera_translation.yaml
+  - id: V3_defocus_blur
+    kind: visual
+    fault_config: configs/fault/robotwin/catalog/visual/defocus_blur.yaml
+  - id: V4_local_occlusion
+    kind: visual
+    fault_config: configs/fault/robotwin/catalog/visual/local_occlusion.yaml
+  - id: V5_illumination_change
+    kind: visual
+    fault_config: configs/fault/robotwin/catalog/visual/illumination_change.yaml
+
+  - id: E1_joint_motion_degradation
+    kind: embodiment
+    fault_config: configs/fault/robotwin/catalog/structure/joint_motion_degradation.yaml
+    arm_variants: [left, right]
+    phases:
+      - {name: warmup, frames: 12, target_deg: 0.0}
+      - {name: positive_sweep, frames: 70, target_deg: 65.0}
+      - {name: settle, frames: 18, target_deg: 65.0}
+  - id: E2_joint_position_bias
+    kind: embodiment
+    fault_config: configs/fault/robotwin/catalog/structure/joint_position_bias.yaml
+    arm_variants: [left, right]
+    phases:
+      - {name: warmup, frames: 12, target_deg: 0.0}
+      - {name: positive_sweep, frames: 55, target_deg: 45.0}
+      - {name: settle, frames: 20, target_deg: 45.0}
+  - id: E3_joint_backlash
+    kind: embodiment
+    fault_config: configs/fault/robotwin/catalog/structure/joint_backlash.yaml
+    arm_variants: [left, right]
+    phases:
+      - {name: warmup, frames: 10, target_deg: 0.0}
+      - {name: positive_sweep, frames: 45, target_deg: 45.0}
+      - {name: reverse_sweep, frames: 75, target_deg: -35.0}
+      - {name: positive_again, frames: 60, target_deg: 35.0}
+      - {name: settle, frames: 15, target_deg: 35.0}
+  - id: E4_joint_range_limitation
+    kind: embodiment
+    fault_config: configs/fault/robotwin/catalog/structure/joint_range_limitation.yaml
+    arm_variants: [left, right]
+    phases:
+      - {name: warmup, frames: 12, target_deg: 0.0}
+      - {name: beyond_limit, frames: 70, target_deg: 60.0}
+      - {name: settle, frames: 18, target_deg: 60.0}
+  - id: E5_periodic_joint_freeze
+    kind: embodiment
+    fault_config: configs/fault/robotwin/catalog/structure/periodic_joint_freeze.yaml
+    arm_variants: [left, right]
+    phases:
+      - {name: warmup, frames: 10, target_deg: 0.0}
+      - {name: positive_sweep, frames: 75, target_deg: 55.0}
+      - {name: reverse_sweep, frames: 90, target_deg: -45.0}
+      - {name: settle, frames: 15, target_deg: -45.0}
