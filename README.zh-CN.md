@@ -428,6 +428,22 @@ python scripts/resilient/evaluate_robotwin_baseline.py \
 解析后的 Fault 路径和 SHA-256 会进入运行协议指纹，避免续跑时混入不同 Fault 定义生成的结果。
 具体公式、后端语义、目标别名和扩展规则见 `configs/fault/README.md`。
 
+正式成功率评测配置与剧烈的演示目录分开保存。下面使用左臂 joint 1 运动保留率0.5，按与论文
+基线相同的50任务、每任务100次clean加100次randomized协议评测官方checkpoint：
+
+```bash
+python scripts/resilient/evaluate_robotwin_baseline.py \
+  --mode paper \
+  --gpu-ids 0,1,2,3 \
+  --run-id fastwam_robotwin_left-joint1-retention-p0p5 \
+  --fault-config \
+    configs/fault/robotwin/evaluation/structure/left_joint1_motion_retention_0p5.yaml
+```
+
+结果写入被Git忽略的
+`evaluate_results/robotwin/robotwin_uncond_3cam_384/<run-id>/`。该流程复用现有launcher、manager
+与仿真器适配器，不为某一种Fault复制新的评测脚本。
+
 已提交的相机示例为 `configs/fault/visual/wrist_camera_local_z.yaml`。用 4 卡评测默认的手腕相机
 绕局部 +Z 轴 30 度：
 

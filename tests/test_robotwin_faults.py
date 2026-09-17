@@ -361,6 +361,25 @@ class RoboTwinFaultTests(unittest.TestCase):
             self.assertIsNotNone(controller, path)
             controller.detach()
 
+    def test_left_joint1_half_retention_evaluation_config(self):
+        path = (
+            PROJECT_ROOT
+            / "configs"
+            / "fault"
+            / "robotwin"
+            / "evaluation"
+            / "structure"
+            / "left_joint1_motion_retention_0p5.yaml"
+        )
+        config = OmegaConf.to_container(OmegaConf.load(path), resolve=True)
+        task = FakeTask()
+        controller = install_fault_pipeline(task, config)
+        self.assertIsNotNone(controller)
+        task.robot.set_arm_joints([1.0, 0.0], [0.0, 0.0], "left")
+        np.testing.assert_allclose(task.robot.left_entity.get_qpos(), [0.5, 0.0])
+        np.testing.assert_allclose(task.robot.right_entity.get_qpos(), [0.0, 0.0])
+        controller.detach()
+
     def test_hydra_default_keeps_robotwin_faults_disabled(self):
         config = OmegaConf.load(PROJECT_ROOT / "configs" / "sim_robotwin.yaml")
         self.assertIsNone(config.EVALUATION.fault_config)

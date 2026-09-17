@@ -450,6 +450,23 @@ The resolved Fault path and SHA-256 participate in the run protocol fingerprint,
 resume from mixing outputs produced by different Fault definitions. Exact formulas, backend
 semantics, target aliases, and extension rules are in `configs/fault/README.md`.
 
+Formal success-rate configurations are separate from the severe demonstration catalog. The
+following command evaluates the official checkpoint with 50% motion retention on left-arm joint 1
+using the same 50-task, 100-clean plus 100-randomized protocol as the paper baseline:
+
+```bash
+python scripts/resilient/evaluate_robotwin_baseline.py \
+  --mode paper \
+  --gpu-ids 0,1,2,3 \
+  --run-id fastwam_robotwin_left-joint1-retention-p0p5 \
+  --fault-config \
+    configs/fault/robotwin/evaluation/structure/left_joint1_motion_retention_0p5.yaml
+```
+
+This writes ignored artifacts under
+`evaluate_results/robotwin/robotwin_uncond_3cam_384/<run-id>/`. The existing launcher, manager,
+and simulator adapter are reused; no Fault-specific evaluation script is required.
+
 The committed camera example is `configs/fault/visual/wrist_camera_local_z.yaml`. Evaluate its
 default +30 degree severity on four GPUs with:
 

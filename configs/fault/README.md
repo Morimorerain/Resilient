@@ -115,6 +115,12 @@ Outputs default to ignored `evaluate_results/robotwin/fault_catalog/`. The visua
 command on nominal/Fault simulators through the global observer camera, label the affected arm,
 and report joint-1 and end-effector divergence.
 
+Keep severe, visualization-oriented definitions under `robotwin/catalog/`. Reproducible success-
+rate experiments belong under `robotwin/evaluation/`; for example,
+`robotwin/evaluation/structure/left_joint1_motion_retention_0p5.yaml` retains 50% of left-arm
+joint-1 motion. Pass these files to the maintained evaluator instead of adding Fault-specific
+policy scripts.
+
 Implement a new plugin by subclassing `resilient.faults.FaultRuntime` and registering its factory
 with `register_fault`. Use only the hooks needed by that fault; hooks are invoked by the
 environment, not the policy:
