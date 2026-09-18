@@ -228,11 +228,121 @@ class RoboTwinFaultTests(unittest.TestCase):
         task.robot.set_arm_joints([1.0, 0.5], [2.0, 3.0], "left")
         np.testing.assert_allclose(task.robot.left_entity.get_qpos(), [0.2, 0.5])
         np.testing.assert_allclose(task.robot.left_entity.get_qvel(), [0.4, 3.0])
+        task.robot.set_arm_joints([1.0, 0.5], [2.0, 3.0], "left")
+        np.testing.assert_allclose(task.robot.left_entity.get_qpos(), [0.2, 0.5])
+        task.robot.set_arm_joints([1.5, 0.5], [2.0, 3.0], "left")
+        np.testing.assert_allclose(task.robot.left_entity.get_qpos(), [0.3, 0.5])
         task.robot.set_arm_joints([1.0, 0.5], [2.0, 3.0], "right")
         np.testing.assert_allclose(task.robot.right_entity.get_qpos(), [1.0, 0.5])
+        state = controller.state_dict()
+        np.testing.assert_allclose(
+            state["motion_command_states"]["left_retention"]["nominal"],
+            [1.5],
+        )
+        np.testing.assert_allclose(
+            state["motion_command_states"]["left_retention"]["applied"],
+            [0.3],
+        )
+        controller.load_state_dict(state)
         self.assertEqual(
             controller.metadata()["faults"][0]["injection_layer"],
             "sapien_articulation_drive_target",
+        )
+
+    def test_position_bias_is_fixed_instead_of_accumulating(self):
+        task = FakeTask()
+        config = pipeline(
+            [
+                {
+                    "id": "left_bias",
+                    "family": "structure.joint_position_bias",
+                    "targets": ["left_arm_joint1"],
+                    "operation": {"type": "fixed_zero_offset"},
+                    "severity": {
+                        "name": "absolute_bias",
+                        "value": 20.0,
+                        "unit": "degree",
+                    },
+                    "parameters": {"bias_deg": 20.0},
+                }
+            ]
+        )
+        install_fault_pipeline(task, config)
+        target = 0.1
+        expected = target + math.radians(20.0)
+        task.robot.set_arm_joints([target, 0.0], [0.0, 0.0], "left")
+        self.assertAlmostEqual(float(task.robot.left_entity.get_qpos()[0]), expected)
+        task.robot.set_arm_joints([target, 0.0], [0.0, 0.0], "left")
+        self.assertAlmostEqual(float(task.robot.left_entity.get_qpos()[0]), expected)
+
+    def test_range_limit_clips_absolute_drive_target(self):
+        task = FakeTask()
+        config = pipeline(
+            [
+                {
+                    "id": "left_range",
+                    "family": "structure.joint_range_limit",
+                    "targets": ["left_arm_joint1"],
+                    "operation": {"type": "absolute_clip"},
+                    "severity": {
+                        "name": "available_range_width",
+                        "value": 16.0,
+                        "unit": "degree",
+                    },
+                    "parameters": {"lower_deg": -8.0, "upper_deg": 8.0},
+                }
+            ]
+        )
+        install_fault_pipeline(task, config)
+        task.robot.set_arm_joints([0.5, 0.0], [1.0, 0.0], "left")
+        self.assertAlmostEqual(float(task.robot.left_entity.get_qpos()[0]), math.radians(8.0))
+        self.assertEqual(float(task.robot.left_entity.get_qvel()[0]), 0.0)
+        task.robot.set_arm_joints([-0.5, 0.0], [-1.0, 0.0], "left")
+        self.assertAlmostEqual(float(task.robot.left_entity.get_qpos()[0]), math.radians(-8.0))
+
+    def test_periodic_freeze_holds_for_exact_control_updates(self):
+        task = FakeTask()
+        config = pipeline(
+            [
+                {
+                    "id": "left_periodic_stick",
+                    "family": "structure.periodic_joint_freeze",
+                    "targets": ["left_arm_joint1"],
+                    "operation": {"type": "angular_periodic_stick"},
+                    "severity": {
+                        "name": "freeze_duration",
+                        "value": 2,
+                        "unit": "control_steps",
+                    },
+                    "parameters": {
+                        "period_deg": 10.0,
+                        "phase_deg": 5.0,
+                        "release_fraction": 0.25,
+                    },
+                }
+            ]
+        )
+        controller = install_fault_pipeline(task, config)
+        target = math.radians(6.0)
+        task.robot.set_arm_joints([0.0, 0.0], [0.0, 0.0], "left")
+        task.robot.set_arm_joints([target, 0.0], [1.0, 0.0], "left")
+        # A future target crossing is not enough: the stick starts only when the next
+        # control update observes that the physical joint actually crossed 5 degrees.
+        self.assertAlmostEqual(float(task.robot.left_entity.get_qpos()[0]), target)
+        for _ in range(2):
+            task.robot.set_arm_joints([target, 0.0], [1.0, 0.0], "left")
+            self.assertAlmostEqual(float(task.robot.left_entity.get_qpos()[0]), math.radians(5.0))
+            self.assertEqual(float(task.robot.left_entity.get_qvel()[0]), 0.0)
+        task.robot.set_arm_joints([target, 0.0], [1.0, 0.0], "left")
+        self.assertAlmostEqual(float(task.robot.left_entity.get_qpos()[0]), target)
+        self.assertEqual(
+            controller.last_joint_diagnostics[2]["hold_position_deg"],
+            [5.0],
+        )
+        state = controller.state_dict()
+        np.testing.assert_allclose(
+            state["periodic_observation_states"]["left_periodic_stick"],
+            [math.radians(5.0)],
         )
 
     def test_two_arm_faults_are_isolated_on_one_dual_arm_articulation(self):

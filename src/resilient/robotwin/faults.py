@@ -19,6 +19,9 @@ from resilient.faults.structure.joint_backlash import JointBacklashFaultRuntime
 from resilient.faults.structure.joint_motion import JointMotionFaultRuntime
 from resilient.faults.structure.joint_position_bias import JointPositionBiasFaultRuntime
 from resilient.faults.structure.joint_state import JointStateFaultRuntime
+from resilient.faults.structure.periodic_joint_freeze import (
+    PeriodicJointFreezeFaultRuntime,
+)
 from resilient.faults.visual.camera_pose import (
     CameraPoseFaultRuntime,
     local_xyz_offset_quaternion,
@@ -98,7 +101,9 @@ class RoboTwinFaultController:
         self._original_update_wrist_camera: Any | None = None
         self._camera_original_poses: dict[str, tuple[Any, np.ndarray, np.ndarray]] = {}
         self._joint_targets: dict[str, tuple[ResolvedJointTarget, ...]] = {}
+        self._motion_command_states: dict[str, dict[str, np.ndarray]] = {}
         self._backlash_command_states: dict[str, dict[str, np.ndarray]] = {}
+        self._periodic_observation_states: dict[str, np.ndarray] = {}
         self._arm_step_indices = {arm: 0 for arm in ROBOTWIN_ARMS}
         self.last_joint_diagnostics: list[dict[str, Any]] = []
         self._attached = False
@@ -188,15 +193,32 @@ class RoboTwinFaultController:
             candidate = position[indices]
             candidate_velocity = velocity[indices]
             if isinstance(fault, JointMotionFaultRuntime):
-                displacement, applied_velocity = fault.law.apply(
-                    candidate - before,
+                # RoboTwin sends an absolute drive target at every control update. Scale each
+                # new nominal command increment exactly once; repeatedly sending an unchanged
+                # target must not let a degraded actuator asymptotically catch up.
+                command_state = self._motion_command_states.get(fault.fault_id)
+                if command_state is None:
+                    nominal_before = before
+                    applied_before = before
+                else:
+                    nominal_before = command_state["nominal"]
+                    applied_before = command_state["applied"]
+                nominal_increment = candidate - nominal_before
+                applied_increment, applied_velocity = fault.law.apply(
+                    nominal_increment,
                     candidate_velocity,
                     context=context,
                 )
-                applied = before + np.asarray(displacement, dtype=np.float64)
+                applied = applied_before + np.asarray(applied_increment, dtype=np.float64)
+                self._motion_command_states[fault.fault_id] = {
+                    "nominal": candidate.copy(),
+                    "applied": np.asarray(applied, dtype=np.float64).copy(),
+                }
                 diagnostics = {
-                    "candidate_displacement_deg": np.rad2deg(candidate - before).tolist(),
-                    "applied_displacement_deg": np.rad2deg(applied - before).tolist(),
+                    "nominal_increment_deg": np.rad2deg(nominal_increment).tolist(),
+                    "applied_increment_deg": np.rad2deg(applied_increment).tolist(),
+                    "nominal_target_error_deg": np.rad2deg(candidate - before).tolist(),
+                    "applied_target_error_deg": np.rad2deg(applied - before).tolist(),
                 }
             elif isinstance(fault, JointPositionBiasFaultRuntime):
                 # A fixed encoder-zero error offsets every physical actuator target. Applying
@@ -232,6 +254,29 @@ class RoboTwinFaultController:
                     "nominal": candidate.copy(),
                     "applied": np.asarray(applied, dtype=np.float64).copy(),
                 }
+            elif isinstance(fault, PeriodicJointFreezeFaultRuntime):
+                previous_actual = self._periodic_observation_states.get(fault.fault_id)
+                if previous_actual is None:
+                    applied = candidate
+                    applied_velocity = candidate_velocity
+                    diagnostics = {
+                        "triggered": [False] * len(indices),
+                        "remaining_hold_steps": [0] * len(indices),
+                        "hold_position_deg": np.rad2deg(before).tolist(),
+                        "last_trigger_index": [None] * len(indices),
+                        "trigger_source": "realized_joint_motion_initialized",
+                    }
+                else:
+                    applied, applied_velocity, diagnostics = (
+                        fault.transform_drive_target_from_observed_motion(
+                            previous_actual,
+                            before,
+                            candidate,
+                            candidate_velocity,
+                            context=context,
+                        )
+                    )
+                self._periodic_observation_states[fault.fault_id] = before.copy()
             elif isinstance(fault, JointStateFaultRuntime):
                 applied, applied_velocity, diagnostics = fault.transform_realized_state(
                     before,
@@ -319,13 +364,9 @@ class RoboTwinFaultController:
 
             def update_wrist_camera(left_pose: Any, right_pose: Any) -> None:
                 if "left_camera" in wrist_faults:
-                    left_pose = self._apply_pose_faults(
-                        left_pose, wrist_faults["left_camera"]
-                    )
+                    left_pose = self._apply_pose_faults(left_pose, wrist_faults["left_camera"])
                 if "right_camera" in wrist_faults:
-                    right_pose = self._apply_pose_faults(
-                        right_pose, wrist_faults["right_camera"]
-                    )
+                    right_pose = self._apply_pose_faults(right_pose, wrist_faults["right_camera"])
                 original(left_pose, right_pose)
 
             cameras.update_wrist_camera = update_wrist_camera
@@ -382,9 +423,7 @@ class RoboTwinFaultController:
             JointStateFaultRuntime,
         )
         unsupported = [
-            fault.family
-            for fault in self.pipeline.faults
-            if not isinstance(fault, supported)
+            fault.family for fault in self.pipeline.faults if not isinstance(fault, supported)
         ]
         if unsupported:
             raise TypeError(f"Fault families lack a RoboTwin adapter: {unsupported}.")
@@ -419,12 +458,17 @@ class RoboTwinFaultController:
             "schema_version": 1,
             "pipeline": copy.deepcopy(self.pipeline.state_dict()),
             "arm_step_indices": dict(self._arm_step_indices),
+            "motion_command_states": {
+                fault_id: {name: value.tolist() for name, value in command_state.items()}
+                for fault_id, command_state in self._motion_command_states.items()
+            },
             "backlash_command_states": {
-                fault_id: {
-                    name: value.tolist()
-                    for name, value in command_state.items()
-                }
+                fault_id: {name: value.tolist() for name, value in command_state.items()}
                 for fault_id, command_state in self._backlash_command_states.items()
+            },
+            "periodic_observation_states": {
+                fault_id: value.tolist()
+                for fault_id, value in self._periodic_observation_states.items()
             },
         }
 
@@ -436,20 +480,66 @@ class RoboTwinFaultController:
         if min(indices.values()) < 0:
             raise ValueError("RoboTwin Fault command indices must be non-negative.")
         self._arm_step_indices = indices
-        restored_backlash: dict[str, dict[str, np.ndarray]] = {}
-        for fault_id, command_state in state.get("backlash_command_states", {}).items():
-            if fault_id not in self._joint_targets:
-                raise ValueError(f"Unknown RoboTwin backlash state: {fault_id!r}.")
+        self._motion_command_states = self._restore_command_states(
+            state.get("motion_command_states", {}),
+            runtime_type=JointMotionFaultRuntime,
+            state_label="motion",
+        )
+        self._backlash_command_states = self._restore_command_states(
+            state.get("backlash_command_states", {}),
+            runtime_type=JointBacklashFaultRuntime,
+            state_label="backlash",
+        )
+        periodic_runtimes = {
+            fault.fault_id
+            for fault in self.pipeline.faults
+            if isinstance(fault, PeriodicJointFreezeFaultRuntime)
+        }
+        restored_periodic: dict[str, np.ndarray] = {}
+        for fault_id, values in state.get("periodic_observation_states", {}).items():
+            if fault_id not in periodic_runtimes or fault_id not in self._joint_targets:
+                raise ValueError(f"Unknown RoboTwin periodic state: {fault_id!r}.")
+            expected = len(self._joint_targets[fault_id])
+            actual = np.asarray(values, dtype=np.float64)
+            if actual.shape != (expected,) or not np.all(np.isfinite(actual)):
+                raise ValueError(f"RoboTwin periodic state mismatch: {fault_id!r}.")
+            restored_periodic[str(fault_id)] = actual.copy()
+        self._periodic_observation_states = restored_periodic
+
+    def _restore_command_states(
+        self,
+        payload: Mapping[str, Any],
+        *,
+        runtime_type: type[JointMotionFaultRuntime] | type[JointBacklashFaultRuntime],
+        state_label: str,
+    ) -> dict[str, dict[str, np.ndarray]]:
+        """Validate target-history state used by absolute-drive-target adapters."""
+        restored: dict[str, dict[str, np.ndarray]] = {}
+        runtimes = {
+            fault.fault_id: fault
+            for fault in self.pipeline.faults
+            if isinstance(fault, runtime_type)
+        }
+        for fault_id, command_state in payload.items():
+            if fault_id not in self._joint_targets or fault_id not in runtimes:
+                raise ValueError(f"Unknown RoboTwin {state_label} state: {fault_id!r}.")
             expected = len(self._joint_targets[fault_id])
             nominal = np.asarray(command_state["nominal"], dtype=np.float64)
             applied = np.asarray(command_state["applied"], dtype=np.float64)
-            if nominal.shape != (expected,) or applied.shape != (expected,):
-                raise ValueError(f"RoboTwin backlash state shape mismatch: {fault_id!r}.")
-            restored_backlash[str(fault_id)] = {
+            if (
+                nominal.shape != (expected,)
+                or applied.shape != (expected,)
+                or not np.all(np.isfinite(nominal))
+                or not np.all(np.isfinite(applied))
+            ):
+                raise ValueError(
+                    f"RoboTwin {state_label} state shape/value mismatch: {fault_id!r}."
+                )
+            restored[str(fault_id)] = {
                 "nominal": nominal.copy(),
                 "applied": applied.copy(),
             }
-        self._backlash_command_states = restored_backlash
+        return restored
 
     def detach(self) -> None:
         """Restore unmodified RoboTwin environment methods and camera poses."""

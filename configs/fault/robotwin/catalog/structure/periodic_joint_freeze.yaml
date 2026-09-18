@@ -8,7 +8,7 @@ pipeline:
       enabled: true
       targets: [left_arm_joint1]
       operation: {type: angular_periodic_stick}
-      severity: {name: freeze_duration, value: 50, unit: control_steps, level: severe}
+      severity: {name: freeze_duration, value: 100, unit: control_steps, level: severe}
       parameters:
         period_deg: 10.0
         phase_deg: 5.0

@@ -47,6 +47,8 @@ class FrameRecord:
     joint_position_rad: float
     end_effector_position_m: np.ndarray
     phase: str
+    commanded_delta_deg: float
+    fault_state: str
 
 
 @dataclass(frozen=True)
@@ -145,10 +147,7 @@ def _fault_label(controller: RoboTwinFaultController) -> str:
     families = "+".join(sorted({str(item["family"]).split(".")[-1] for item in faults}))
     severities = "+".join(
         sorted(
-            {
-                f"{float(item['severity']['value']):g} {item['severity']['unit']}"
-                for item in faults
-            }
+            {f"{float(item['severity']['value']):g} {item['severity']['unit']}" for item in faults}
         )
     )
     return f"{families} | severity={severities}"
@@ -262,6 +261,32 @@ def _phase_targets(entry: dict[str, Any]) -> tuple[list[float], list[str]]:
     return targets, phases
 
 
+def _summarize_fault_diagnostics(items: list[dict[str, Any]]) -> str:
+    """Summarize actuator state accumulated during one rendered video frame."""
+    if not items:
+        return "not installed"
+    family = str(items[-1].get("family", "unknown")).rsplit(".", 1)[-1]
+    if family == "joint_motion":
+        nominal = np.asarray(items[-1].get("nominal_increment_deg", [0.0]))
+        applied = np.asarray(items[-1].get("applied_increment_deg", [0.0]))
+        return f"dnom/dapp={float(nominal[0]):+.3f}/{float(applied[0]):+.3f}deg"
+    if family == "joint_position_bias":
+        bias = np.asarray(items[-1].get("bias_deg", [0.0]))
+        return f"bias={float(bias[0]):+.1f}deg"
+    if family == "joint_backlash":
+        reversed_now = any(any(item.get("direction_reversal", [])) for item in items)
+        remaining = max(float(np.max(item.get("remaining_gap_deg", [0.0]))) for item in items)
+        return f"rev={reversed_now}, gap={remaining:.2f}deg"
+    if family == "joint_range_limit":
+        clipped = any(any(item.get("clipped", [])) for item in items)
+        return f"clipped={clipped}"
+    if family == "periodic_joint_freeze":
+        triggered = any(any(item.get("triggered", [])) for item in items)
+        remaining = max(int(np.max(item.get("remaining_hold_steps", [0]))) for item in items)
+        return f"trigger={triggered}, hold={remaining}"
+    return family
+
+
 def _run_arm_motion(
     task: Any,
     entry: dict[str, Any],
@@ -274,6 +299,7 @@ def _run_arm_motion(
     if substeps <= 0:
         raise ValueError("physics_steps_per_frame must be positive.")
     camera_name = str(entry.get("embodiment_camera", "observer_camera"))
+    controller = getattr(task, "_resilient_fault_controller", None)
     records = [
         FrameRecord(
             image=_embodiment_frame(task, camera_name),
@@ -282,10 +308,13 @@ def _run_arm_motion(
                 getattr(task.robot, f"get_{arm}_ee_pose")()[:3], dtype=np.float64
             ),
             phase="initial",
+            commanded_delta_deg=0.0,
+            fault_state="not installed" if controller is None else "awaiting command",
         )
     ]
     previous_deg = 0.0
     for target_deg, phase in zip(targets_deg, phases, strict=True):
+        diagnostics_start = 0 if controller is None else len(controller.last_joint_diagnostics)
         for substep in range(substeps):
             fraction = (substep + 1) / substeps
             sub_target_deg = previous_deg + fraction * (target_deg - previous_deg)
@@ -293,6 +322,9 @@ def _run_arm_motion(
             position[0] = start[0] + np.deg2rad(sub_target_deg)
             task.robot.set_arm_joints(position, np.zeros_like(position), arm)
             task.scene.step()
+        frame_diagnostics = (
+            [] if controller is None else controller.last_joint_diagnostics[diagnostics_start:]
+        )
         records.append(
             FrameRecord(
                 image=_embodiment_frame(task, camera_name),
@@ -301,6 +333,8 @@ def _run_arm_motion(
                     getattr(task.robot, f"get_{arm}_ee_pose")()[:3], dtype=np.float64
                 ),
                 phase=phase,
+                commanded_delta_deg=float(target_deg),
+                fault_state=_summarize_fault_diagnostics(frame_diagnostics),
             )
         )
         previous_deg = target_deg
@@ -372,12 +406,8 @@ def _write_arm_video(
         macro_block_size=2,
     ) as writer:
         for index, (normal, damaged) in enumerate(zip(clean, faulted, strict=True)):
-            clean_delta = np.rad2deg(
-                normal.joint_position_rad - initial_clean.joint_position_rad
-            )
-            fault_delta = np.rad2deg(
-                damaged.joint_position_rad - initial_fault.joint_position_rad
-            )
+            clean_delta = np.rad2deg(normal.joint_position_rad - initial_clean.joint_position_rad)
+            fault_delta = np.rad2deg(damaged.joint_position_rad - initial_fault.joint_position_rad)
             joint_gap = abs(np.rad2deg(normal.joint_position_rad - damaged.joint_position_rad))
             eef_gap = 1000.0 * np.linalg.norm(
                 normal.end_effector_position_m - damaged.end_effector_position_m
@@ -394,14 +424,17 @@ def _write_arm_video(
                     clean_telemetry={
                         "phase": normal.phase,
                         "moving arm": arm,
+                        "commanded joint1 delta (deg)": normal.commanded_delta_deg,
                         "joint1 delta (deg)": float(clean_delta),
                     },
                     fault_telemetry={
                         "phase": damaged.phase,
                         "affected arm": arm,
+                        "commanded joint1 delta (deg)": damaged.commanded_delta_deg,
                         "joint1 delta (deg)": float(fault_delta),
                         "joint1 gap (deg)": float(joint_gap),
                         "EEF gap (mm)": float(eef_gap),
+                        "state": damaged.fault_state,
                     },
                     timestamp_seconds=index / fps,
                 )
@@ -514,8 +547,10 @@ def main() -> None:
     finally:
         os.chdir(previous_cwd)
     output_root.mkdir(parents=True, exist_ok=True)
-    selected_slug = "all" if len(selected) == len(entries) else "__".join(
-        str(entry["id"]) for entry in selected
+    selected_slug = (
+        "all"
+        if len(selected) == len(entries)
+        else "__".join(str(entry["id"]) for entry in selected)
     )
     manifest_path = output_root / f"catalog_manifest__{selected_slug}.json"
     manifest_path.write_text(
@@ -530,9 +565,7 @@ def main() -> None:
             "schema_version": 1,
             "simulator": "robotwin_sapien",
             "catalog": str(catalog_path.relative_to(PROJECT_ROOT)),
-            "entries": [
-                json.loads(path.read_text(encoding="utf-8")) for path in summary_paths
-            ],
+            "entries": [json.loads(path.read_text(encoding="utf-8")) for path in summary_paths],
         }
         complete_path = output_root / "catalog_manifest__all.json"
         complete_path.write_text(

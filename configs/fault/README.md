@@ -90,11 +90,16 @@ cameras and one Panda arm. Faults remain below the policy:
 - E1--E5 transform the selected SAPIEN articulation drive target inside
   `Robot.set_arm_joints()`, immediately before the physics simulator receives it.
 
-RoboTwin writes absolute drive targets. Its E3 adapter therefore retains the nominal and applied
-target history and feeds successive command increments into the shared backlash kernel; this
-preserves the configured reverse dead travel instead of consuming it from the full target error in
-one update. This adapter history is included in `RoboTwinFaultController.state_dict()` for exact
-continuation.
+RoboTwin writes absolute drive targets. Its E1 and E3 adapters therefore retain nominal and applied
+target histories. E1 applies its retention law to `q_cmd(t) - q_cmd(t-1)` and accumulates the
+scaled increment from the prior applied target; an unchanged repeated target cannot make the
+degraded joint catch up. E3 feeds the same successive nominal increments into the shared backlash
+kernel, preserving the configured reverse dead travel instead of consuming it from the full target
+error in one update. Both histories are included in `RoboTwinFaultController.state_dict()` for
+exact continuation. Periodic freeze also checkpoints a fixed hold angle, preventing inertial drift
+from redefining the stuck position during the configured hold interval. Its SAPIEN adapter detects
+bad-tooth crossings from consecutive realized qpos samples rather than the future drive target, so
+a distant command cannot falsely trigger several gear positions before the joint reaches them.
 
 Use `left_arm_joint1` through `left_arm_joint6` and `right_arm_joint1` through
 `right_arm_joint6` as embodiment-independent ALOHA aliases. Exact, unambiguous simulator joint
@@ -114,6 +119,9 @@ Outputs default to ignored `evaluate_results/robotwin/fault_catalog/`. The visua
 `head_camera`, `left_camera`, and `right_camera`; embodiment videos show the same timeline and
 command on nominal/Fault simulators through the global observer camera, label the affected arm,
 and report joint-1 and end-effector divergence.
+The embodiment overlay also reports the nominal commanded joint-1 displacement and a family-
+specific runtime state (scaled increment, bias, remaining backlash, active limit, or gear-stick
+countdown), so transient E3/E5 behavior is visible without guessing from pixels alone.
 
 Keep severe, visualization-oriented definitions under `robotwin/catalog/`. Reproducible success-
 rate experiments belong under `robotwin/evaluation/`; for example,

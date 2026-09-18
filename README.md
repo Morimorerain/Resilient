@@ -413,6 +413,23 @@ camera entity poses; V3--V5 operate at the environment camera-sensor return; E1-
 SAPIEN articulation drive targets inside `Robot.set_arm_joints()`. No Fault is applied to a
 Fast-WAM action tensor or model preprocessing layer.
 
+RoboTwin controllers provide absolute joint targets. For E1, the adapter therefore keeps both the
+previous nominal target and the previous applied target and scales each newly commanded increment
+exactly once:
+
+```text
+delta_nominal(t) = q_cmd(t) - q_cmd(t-1)
+q_applied(t) = q_applied(t-1) + retention * delta_nominal(t)
+```
+
+Repeating an unchanged absolute target produces zero additional motion, so a degraded joint cannot
+silently catch up through repeated controller updates. E2 applies one persistent, non-accumulating
+actuator target offset; E3 consumes incremental reverse travel; E4 clips the absolute target; and
+E5 holds one fixed physical angle for the configured number of control updates after an angular
+bad-tooth crossing. E5 detects crossings only from consecutive realized SAPIEN qpos samples, never
+from a future drive target that merely spans a bad tooth. E1/E3 command histories and all E5
+sticking state are checkpointed by the Fault controller.
+
 Canonical embodied targets are `left_arm_joint1`--`left_arm_joint6` and
 `right_arm_joint1`--`right_arm_joint6`. Exact unambiguous SAPIEN joint names are also accepted.
 Keep one stateful Fault entry on one arm and compose two entries when both arms should be damaged,

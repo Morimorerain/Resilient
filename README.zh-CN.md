@@ -397,6 +397,20 @@ SAPIEN 相机 entity 位姿；V3--V5 在环境相机传感器返回层生效；E
 `Robot.set_arm_joints()` 内、写入 SAPIEN articulation drive target 前变换目标。任何 Fault
 都不作用于 Fast-WAM action tensor 或模型预处理层。
 
+RoboTwin controller 提供的是绝对关节目标。E1 因此同时保存上一次 nominal target 和 applied
+target，并且只对每次新增的命令增量缩放一次：
+
+```text
+delta_nominal(t) = q_cmd(t) - q_cmd(t-1)
+q_applied(t) = q_applied(t-1) + retention * delta_nominal(t)
+```
+
+重复发送不变的绝对目标只会产生零新增运动，因此退化关节不会因 controller 重复更新而逐渐追上
+正常目标。E2 施加一个持续但不累加的执行器目标偏置；E3 消耗反向后的增量空行程；E4 裁剪绝对
+目标；E5 越过角度坏齿后，在配置的控制更新次数内保持同一个固定物理角度。E1/E3 的命令历史及
+E5 的触发只比较相邻两次实际 SAPIEN qpos，不会因为尚未实现的远端 drive target 跨过坏齿而
+提前触发。E1/E3 的命令历史及 E5 的全部卡钝状态都会进入 Fault controller 断点状态。
+
 具身 Fault 的规范目标为 `left_arm_joint1`--`left_arm_joint6` 与
 `right_arm_joint1`--`right_arm_joint6`，也可以使用无歧义的 SAPIEN 原始关节名。每个有状态
 Fault 项只应作用于一条机械臂；如需双臂同时损坏，应组合两个 Fault 项，使回差和周期冻结状态
