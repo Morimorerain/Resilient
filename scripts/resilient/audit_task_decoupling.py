@@ -60,6 +60,7 @@ from resilient.task_decoupling.libero_oracle import (  # noqa: E402
 )
 from resilient.task_decoupling.postprocess import postprocess_masks  # noqa: E402
 from resilient.task_decoupling.preprocessing import stack_camera_videos  # noqa: E402
+from resilient.task_decoupling.prompts import boxes_from_binary_masks  # noqa: E402
 from resilient.task_decoupling.providers.file_service import (  # noqa: E402
     FileServiceMaskProvider,
 )
@@ -331,8 +332,13 @@ def _pipeline(cfg: DictConfig, provider, entities) -> TaskRegionDisentangler:
 
 
 def _analyze(cfg: DictConfig, output_dir: Path) -> None:
+    collection_dir = _project_path(
+        cfg.task_decoupling.artifacts.get(
+            "collection_dir", cfg.task_decoupling.artifacts.output_dir
+        )
+    )
     manifest = json.loads(
-        (output_dir / "collection_manifest.json").read_text(encoding="utf-8")
+        (collection_dir / "collection_manifest.json").read_text(encoding="utf-8")
     )
     entities = load_entity_specification(
         _project_path(cfg.task_decoupling.entities.config),
@@ -348,6 +354,7 @@ def _analyze(cfg: DictConfig, output_dir: Path) -> None:
         timeout_seconds=float(cfg.task_decoupling.mask_provider.timeout_seconds),
         poll_seconds=float(cfg.task_decoupling.mask_provider.poll_seconds),
         cache_enabled=bool(cfg.task_decoupling.mask_provider.cache_enabled),
+        prompt_mode=str(cfg.task_decoupling.mask_provider.prompt_mode),
     )
     cfg.model.load_text_encoder = False
     model = instantiate(cfg.model, model_dtype=torch.bfloat16, device="cuda")
@@ -361,11 +368,22 @@ def _analyze(cfg: DictConfig, output_dir: Path) -> None:
     state_indices: list[int] = []
     random_seed = int(cfg.task_decoupling.audit.random_seed)
     for sample_index, record in enumerate(manifest["records"]):
-        with np.load(output_dir / record["path"], allow_pickle=False) as sample:
+        with np.load(collection_dir / record["path"], allow_pickle=False) as sample:
             videos = {"image": sample["image"], "wrist_image": sample["wrist_image"]}
             oracle_masks = sample["oracle_task_masks"].astype(bool)
             robot_masks = sample["oracle_robot_masks"].astype(bool)
-        sam_result = _pipeline(cfg, provider, entities).extract(videos, model)
+        prompt_hints = None
+        if str(cfg.task_decoupling.mask_provider.type) == "samhq_file_service":
+            prompt_hints = boxes_from_binary_masks(
+                oracle_masks,
+                camera_names=("image", "wrist_image"),
+                entity_ids=tuple(entity.entity_id for entity in entities),
+                source=str(cfg.task_decoupling.mask_provider.prompt_source),
+                padding_px=int(cfg.task_decoupling.mask_provider.box_padding_px),
+            )
+        sam_result = _pipeline(cfg, provider, entities).extract(
+            videos, model, prompt_hints=prompt_hints
+        )
         oracle_provider = ArrayOracleMaskProvider(
             oracle_masks, ("image", "wrist_image")
         )
@@ -474,7 +492,7 @@ def _analyze(cfg: DictConfig, output_dir: Path) -> None:
     )
     gates = cfg.task_decoupling.audit.gates
     aggregate["gate0_pass"] = bool(aggregate["replay_max_pixel_difference"] == 0.0)
-    aggregate["gate1_pass"] = bool(
+    mask_quality_pass = bool(
         aggregate["mask_recall"] >= float(gates.minimum_union_recall)
         and aggregate["mask_iou"] >= float(gates.minimum_union_iou)
         and aggregate["minimum_entity_recall"] >= float(gates.minimum_entity_recall)
@@ -482,13 +500,29 @@ def _analyze(cfg: DictConfig, output_dir: Path) -> None:
         <= float(gates.maximum_robot_contamination)
         and aggregate["temporal_iou"] >= float(gates.minimum_temporal_iou)
     )
+    provider_audit_only = bool(cfg.task_decoupling.mask_provider.audit_only)
+    aggregate["gate1_mask_quality_pass"] = mask_quality_pass
+    aggregate["gate1_pass"] = None if provider_audit_only else mask_quality_pass
     # Gate 2 violations raise during construction, before any metric can be written.
     aggregate["gate2_pass"] = True
-    aggregate["gate3_residual_specificity_pass"] = bool(
+    residual_specificity_pass = bool(
         aggregate["sam_oracle_residual_cosine"]
         >= aggregate["random_oracle_residual_cosine"]
         + float(gates.residual_cosine_margin_over_shifted_control)
     )
+    aggregate["gate3_oracle_prompted_upper_bound_pass"] = residual_specificity_pass
+    aggregate["gate3_residual_specificity_pass"] = (
+        None if provider_audit_only else residual_specificity_pass
+    )
+    aggregate["mask_provider_type"] = str(cfg.task_decoupling.mask_provider.type)
+    aggregate["mask_provider_audit_only"] = provider_audit_only
+    aggregate["prompt_mode"] = str(cfg.task_decoupling.mask_provider.prompt_mode)
+    aggregate["prompt_source"] = cfg.task_decoupling.mask_provider.get(
+        "prompt_source", "entity_text_then_video_tracking"
+    )
+    aggregate["analysis_git_sha"] = _git_sha()
+    aggregate["collection_source_git_sha"] = manifest["source_git_sha"]
+    aggregate["analysis_config_sha256"] = _resolved_config_sha256(cfg)
     (output_dir / "summary.json").write_text(
         json.dumps(aggregate, indent=2) + "\n", encoding="utf-8"
     )
@@ -512,7 +546,13 @@ def main(cfg: DictConfig) -> None:
     OmegaConf.save(cfg, output_dir / "resolved_config.yaml", resolve=True)
     phase = str(cfg.task_decoupling.audit.phase)
     if phase == "collect":
-        _collect(cfg, output_dir)
+        collection_dir = _project_path(
+            cfg.task_decoupling.artifacts.get(
+                "collection_dir", cfg.task_decoupling.artifacts.output_dir
+            )
+        )
+        collection_dir.mkdir(parents=True, exist_ok=True)
+        _collect(cfg, collection_dir)
     elif phase == "analyze":
         _analyze(cfg, output_dir)
     else:

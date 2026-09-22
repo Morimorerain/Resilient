@@ -146,6 +146,8 @@ def _process_request(worker: Sam3Worker, request_json: Path, queue_dir: Path) ->
         expected_identity = f"sam3.1:{SAM_SOURCE_COMMIT}:{SAM_CHECKPOINT_SHA256}"
         if request.get("model_identity") != expected_identity:
             raise ValueError("Request model identity does not match the running service.")
+        if request.get("prompt_mode") != "text_video":
+            raise ValueError("SAM 3.1 service requires text-video prompts.")
         requested_threshold = float(request["output_probability_threshold"])
         if not np.isclose(requested_threshold, worker.output_probability_threshold):
             raise ValueError("Request threshold does not match the running service.")
@@ -181,6 +183,7 @@ def _process_request(worker: Sam3Worker, request_json: Path, queue_dir: Path) ->
                 "request_id": request["request_id"],
                 "model_identity": expected_identity,
                 "output_probability_threshold": worker.output_probability_threshold,
+                "prompt_mode": "text_video",
                 "duration_seconds": time.monotonic() - started,
                 "camera_names": list(camera_names),
                 "entity_ids": [str(item["id"]) for item in entities],

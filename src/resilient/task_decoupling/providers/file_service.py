@@ -1,4 +1,4 @@
-"""Dependency-free filesystem RPC client for an isolated SAM 3.1 service."""
+"""Dependency-free filesystem RPC client for isolated segmentation services."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from pathlib import Path
 
 import numpy as np
 
-from ..types import EntitySpec, MaskBatch
+from ..types import BoxPromptBatch, EntitySpec, MaskBatch
 
 SCHEMA_VERSION = 1
 
@@ -21,10 +21,13 @@ def _content_hash(
     entities: tuple[EntitySpec, ...],
     model_identity: str,
     output_probability_threshold: float,
+    prompt_mode: str,
+    prompt_hints: BoxPromptBatch | None,
 ) -> str:
     digest = hashlib.sha256()
     digest.update(model_identity.encode())
     digest.update(repr(output_probability_threshold).encode())
+    digest.update(prompt_mode.encode())
     for name, video in videos.items():
         digest.update(name.encode())
         array = np.ascontiguousarray(video)
@@ -34,6 +37,10 @@ def _content_hash(
     for entity in entities:
         digest.update(entity.entity_id.encode())
         digest.update(entity.prompt.encode())
+    if prompt_hints is not None:
+        digest.update(prompt_hints.source.encode())
+        digest.update(np.ascontiguousarray(prompt_hints.boxes_xyxy).tobytes())
+        digest.update(np.ascontiguousarray(prompt_hints.valid).tobytes())
     return digest.hexdigest()
 
 
@@ -61,6 +68,7 @@ class FileServiceMaskProvider:
         timeout_seconds: float = 300.0,
         poll_seconds: float = 0.1,
         cache_enabled: bool = True,
+        prompt_mode: str = "text_video",
     ) -> None:
         self.queue_dir = Path(queue_dir)
         self.model_identity = str(model_identity)
@@ -68,10 +76,13 @@ class FileServiceMaskProvider:
         self.timeout_seconds = float(timeout_seconds)
         self.poll_seconds = float(poll_seconds)
         self.cache_enabled = bool(cache_enabled)
+        self.prompt_mode = str(prompt_mode)
         if self.timeout_seconds <= 0 or self.poll_seconds <= 0:
             raise ValueError("Service timeout and polling interval must be positive.")
         if not 0.0 < self.output_probability_threshold < 1.0:
             raise ValueError("SAM output probability threshold must be in (0,1).")
+        if self.prompt_mode not in {"text_video", "box_per_frame"}:
+            raise ValueError("Prompt mode must be text_video or box_per_frame.")
         for child in ("requests", "responses", "cache"):
             (self.queue_dir / child).mkdir(parents=True, exist_ok=True)
 
@@ -79,6 +90,7 @@ class FileServiceMaskProvider:
         self,
         videos: dict[str, np.ndarray],
         entities: tuple[EntitySpec, ...],
+        prompt_hints: BoxPromptBatch | None = None,
     ) -> MaskBatch:
         camera_names = tuple(videos)
         if not camera_names or not entities:
@@ -89,12 +101,33 @@ class FileServiceMaskProvider:
         video_shape = next(iter(shapes))
         if len(video_shape) != 4 or video_shape[-1] != 3:
             raise ValueError("Camera videos must have shape [T,H,W,3].")
+        if self.prompt_mode == "text_video" and prompt_hints is not None:
+            raise ValueError("The text-video backend does not accept box prompts.")
+        if self.prompt_mode == "box_per_frame" and prompt_hints is None:
+            raise ValueError("The per-frame box backend requires box prompts.")
+        if prompt_hints is not None:
+            if prompt_hints.camera_names != camera_names:
+                raise ValueError("Prompt camera order differs from the request.")
+            entity_ids = tuple(entity.entity_id for entity in entities)
+            if prompt_hints.entity_ids != entity_ids:
+                raise ValueError("Prompt entities differ from the request.")
+            if prompt_hints.boxes_xyxy.shape[2] != video_shape[0]:
+                raise ValueError("Prompt and video frame counts differ.")
+            selected_boxes = prompt_hints.boxes_xyxy[prompt_hints.valid]
+            if selected_boxes.size and (
+                np.any(selected_boxes[:, :2] < 0)
+                or np.any(selected_boxes[:, 2] > video_shape[2])
+                or np.any(selected_boxes[:, 3] > video_shape[1])
+            ):
+                raise ValueError("Prompt boxes must stay within the video frame.")
 
         request_id = _content_hash(
             videos,
             entities,
             self.model_identity,
             self.output_probability_threshold,
+            self.prompt_mode,
+            prompt_hints,
         )
         cache_npz = self.queue_dir / "cache" / f"{request_id}.npz"
         cache_json = self.queue_dir / "cache" / f"{request_id}.json"
@@ -106,10 +139,13 @@ class FileServiceMaskProvider:
         request_json = self.queue_dir / "requests" / f"{token}.json"
         response_npz = self.queue_dir / "responses" / f"{token}.npz"
         response_json = self.queue_dir / "responses" / f"{token}.json"
-        _atomic_npz(
-            request_npz,
-            **{f"camera_{index}": videos[name] for index, name in enumerate(camera_names)},
-        )
+        payload = {
+            f"camera_{index}": videos[name] for index, name in enumerate(camera_names)
+        }
+        if prompt_hints is not None:
+            payload["prompt_boxes_xyxy"] = prompt_hints.boxes_xyxy
+            payload["prompt_valid"] = prompt_hints.valid
+        _atomic_npz(request_npz, **payload)
         _atomic_json(
             request_json,
             {
@@ -122,6 +158,8 @@ class FileServiceMaskProvider:
                 ],
                 "model_identity": self.model_identity,
                 "output_probability_threshold": self.output_probability_threshold,
+                "prompt_mode": self.prompt_mode,
+                "prompt_source": None if prompt_hints is None else prompt_hints.source,
             },
         )
 
@@ -158,6 +196,8 @@ class FileServiceMaskProvider:
             raise RuntimeError(f"SAM service failed: {metadata.get('error', 'unknown error')}")
         if metadata.get("model_identity") != self.model_identity:
             raise ValueError("SAM response model identity mismatch.")
+        if metadata.get("prompt_mode") != self.prompt_mode:
+            raise ValueError("SAM response prompt mode mismatch.")
         if not np.isclose(
             float(metadata.get("output_probability_threshold", -1.0)),
             self.output_probability_threshold,

@@ -1,6 +1,6 @@
 # @package task_decoupling
 
-# Disabled preserves the existing Stage-II rollout, reward, and optimizer path.
+# Temporary audit backend. It is intentionally forbidden in Stage-II training.
 enabled: false
 mode: audit
 
@@ -8,14 +8,16 @@ entities:
   config: configs/task_entities/libero_10_task7.yaml
 
 mask_provider:
-  type: sam3_file_service
-  prompt_mode: text_video
-  audit_only: false
-  queue_dir: data/.cache/task_decoupling_rpc
+  type: samhq_file_service
+  prompt_mode: box_per_frame
+  audit_only: true
+  queue_dir: data/.cache/task_decoupling_rpc_samhq
   timeout_seconds: 300.0
   poll_seconds: 0.1
   cache_enabled: true
-  model_identity: sam3.1:2345a4ad109ac29c569da749c91d84f10dc08c40:0567debeec80ba4ac6369540c6c248025283cb3ff2b92827509e57e2b3541cb6
+  model_identity: samhq:0.3:a7ac14a085326d9fa6199c8c698c4f0e7280afdbb974d2c4660ec60877b45e35
+  box_padding_px: 2
+  prompt_source: libero_instance_oracle_per_frame_xyxy
 
 segmentation:
   output_probability_threshold: 0.5
@@ -37,15 +39,13 @@ latent:
 artifacts:
   save_every_n_groups: 25
   collection_dir: evaluate_results/task_decoupling/libero10_task7_joint1_half
-  output_dir: evaluate_results/task_decoupling/libero10_task7_joint1_half
+  output_dir: evaluate_results/task_decoupling/libero10_task7_joint1_half_samhq_oracle_box
 
 audit:
-  phase: collect
-  # Training states 40--49 form an internal audit split; official validation states stay unseen.
+  phase: analyze
   state_indices: [40, 41, 42, 43, 44, 45, 46, 47, 48, 49]
   train_state_indices: [40, 41, 42, 43, 44, 45, 46, 47]
   test_state_indices: [48, 49]
-  # Stage-I trajectories contain 271 actions, so the last exact 32-action window starts at 239.
   anchor_steps: [0, 80, 160, 239]
   future_frame_steps: [0, 4, 8, 12, 16, 20, 24, 28, 32]
   ridge_regularization: 10.0

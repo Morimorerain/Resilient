@@ -10,7 +10,7 @@ import numpy as np
 from .counterfactual import build_local_blur_counterfactual
 from .postprocess import postprocess_masks
 from .preprocessing import camera_videos_to_model_video
-from .types import EntitySpec, TaskResidual
+from .types import BoxPromptBatch, EntitySpec, TaskResidual
 from .vae_residual import encode_task_residual
 
 
@@ -38,10 +38,16 @@ class TaskRegionDisentangler:
         self.dilation_radius_px = int(dilation_radius_px)
         self.sigma_short_edge_ratio = float(sigma_short_edge_ratio)
 
-    def extract(self, videos: Mapping[str, np.ndarray], model: Any) -> TaskResidual:
+    def extract(
+        self,
+        videos: Mapping[str, np.ndarray],
+        model: Any,
+        *,
+        prompt_hints: BoxPromptBatch | None = None,
+    ) -> TaskResidual:
         """Segment, build a counterfactual, and encode one candidate video."""
         selected = {name: np.asarray(videos[name]) for name in self.camera_order}
-        masks = self.mask_provider.segment(selected, self.entities)
+        masks = self.mask_provider.segment(selected, self.entities, prompt_hints)
         if masks.camera_names != self.camera_order:
             raise ValueError("Mask provider changed the configured camera order.")
         cleaned = postprocess_masks(

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from ..types import EntitySpec, MaskBatch
+from ..types import BoxPromptBatch, EntitySpec, MaskBatch
 
 
 class ArrayOracleMaskProvider:
@@ -20,7 +20,10 @@ class ArrayOracleMaskProvider:
         self,
         videos: dict[str, np.ndarray],
         entities: tuple[EntitySpec, ...],
+        prompt_hints: BoxPromptBatch | None = None,
     ) -> MaskBatch:
+        if prompt_hints is not None:
+            raise ValueError("The oracle provider does not consume external prompt hints.")
         if tuple(videos) != self.camera_names:
             raise ValueError("Oracle camera order differs from the requested video.")
         if self.masks.shape[:2] != (len(videos), len(entities)):

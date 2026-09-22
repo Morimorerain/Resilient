@@ -946,6 +946,39 @@ CUDA_VISIBLE_DEVICES=1 python scripts/resilient/audit_task_decoupling.py \
 `data/.cache/task_decoupling_rpc/`。服务生命周期见 `services/sam3/README.md`，全部阈值和划分见
 `configs/task_decoupling/sam3p1_local_blur.yaml`。
 
+### 临时 HQ-SAM 审计后端
+
+在等待 gated SAM 3.1 权限期间，可以通过同一个 `MaskProvider` 边界，用冻结的 HQ-SAM
+ViT-H 跑 Gate 3。这个临时后端不具备语言定位或时序跟踪能力：它把 LIBERO instance mask
+转换成逐相机、逐实体、逐帧的 bounding box，再让 HQ-SAM 细化这些框。因此它只是**oracle
+提示的上界审计**，不是可部署的 Gate-1/Gate-3 结果。其 summary 中 `gate1_pass` 与
+`gate3_residual_specificity_pass` 保持为 `null`，诊断结果写入单独命名的 mask-quality 和
+upper-bound 字段；Stage-II runtime 会明确拒绝该 provider。
+
+官方 [HQ-SAM 项目](https://github.com/SysCV/sam-hq) 的 ViT-H 权重可从
+[官方下载地址](https://drive.google.com/file/d/1qobFYrI4eyIANfBSmYcGuWRaSIXfMOQ8/view)取得。
+其许可证为 Apache-2.0，大小为 2,570,940,653 字节，SHA-256 为
+`a7ac14a085326d9fa6199c8c698c4f0e7280afdbb974d2c4660ec60877b45e35`，规范位置是
+`checkpoints/sam_hq/sam_hq_vit_h.pth`；完整资产约定见 `checkpoints/sam_hq/README.md`。
+隔离环境使用 uv 0.11.7、CPython 3.12.13、PyTorch 2.10.0/CUDA 12.8 和官方
+`segment-anything-hq==0.3`：
+
+```bash
+bash scripts/resilient/create_samhq_environment.sh .venv-samhq
+
+CUDA_VISIBLE_DEVICES=0 .venv-samhq/bin/python services/sam_hq/server.py \
+  --queue-dir data/.cache/task_decoupling_rpc_samhq \
+  --checkpoint checkpoints/sam_hq/sam_hq_vit_h.pth
+
+# 复用已经采集的 40 段 clip；在 Fast-WAM 环境中运行 VAE 分析。
+CUDA_VISIBLE_DEVICES=1 python scripts/resilient/audit_task_decoupling.py \
+  task_decoupling=samhq_oracle_box_local_blur
+```
+
+Git 忽略的输出位于
+`evaluate_results/task_decoupling/libero10_task7_joint1_half_samhq_oracle_box/`。后续替换回
+SAM3.1 时只需选择 `task_decoupling=sam3p1_local_blur`；反事实、VAE 与指标实现完全复用。
+
 ## 扩展开关与基线保护
 
 以下规则为强制要求：
@@ -972,7 +1005,7 @@ CUDA_VISIBLE_DEVICES=1 python scripts/resilient/audit_task_decoupling.py \
 ```bash
 python -m pip install -r requirements-ci.txt
 PYTHONPATH=src python -m pytest -m "not gpu and not libero"
-ruff check src/resilient tests scripts/resilient services/sam3
+ruff check src/resilient tests scripts/resilient services
 ```
 
 一次性调试脚本和输出使用后必须删除。可长期复用的 GPU/LIBERO 检查放入 `tests/integration/` 并添加明确标记。

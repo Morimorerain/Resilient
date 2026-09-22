@@ -81,6 +81,7 @@ FastWAM = "https://github.com/yuantianyuan01/FastWAM"
 OPSD = "https://github.com/siyan-zhao/OPSD"
 FPO = "https://github.com/akanazawa/fpo"
 SAM3 = "https://github.com/facebookresearch/sam3"
+SAMHQ = "https://github.com/SysCV/sam-hq"
 
 [tool.resilient.external-environments.sam3]
 python = "3.12.13"
@@ -89,6 +90,14 @@ environment = "environment/environment-sam3.yml"
 source_commit = "2345a4ad109ac29c569da749c91d84f10dc08c40"
 checkpoint = "checkpoints/sam3/sam3.1_multiplex.pt"
 checkpoint_sha256 = "0567debeec80ba4ac6369540c6c248025283cb3ff2b92827509e57e2b3541cb6"
+
+[tool.resilient.external-environments.samhq]
+python = "3.12.13"
+requirements = "requirements-samhq.txt"
+environment = "environment/environment-samhq.yml"
+package = "segment-anything-hq==0.3"
+checkpoint = "checkpoints/sam_hq/sam_hq_vit_h.pth"
+checkpoint_sha256 = "a7ac14a085326d9fa6199c8c698c4f0e7280afdbb974d2c4660ec60877b45e35"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

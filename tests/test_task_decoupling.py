@@ -22,9 +22,10 @@ from resilient.task_decoupling.config import validate_task_decoupling_config
 from resilient.task_decoupling.counterfactual import build_local_blur_counterfactual
 from resilient.task_decoupling.entities import load_entity_specification
 from resilient.task_decoupling.pipeline import TaskRegionDisentangler
+from resilient.task_decoupling.prompts import boxes_from_binary_masks
 from resilient.task_decoupling.providers.file_service import FileServiceMaskProvider
 from resilient.task_decoupling.providers.oracle import ArrayOracleMaskProvider
-from resilient.task_decoupling.types import EntitySpec, MaskBatch
+from resilient.task_decoupling.types import BoxPromptBatch, EntitySpec, MaskBatch
 
 
 class _FakeFastWAM:
@@ -110,6 +111,20 @@ class CounterfactualTests(unittest.TestCase):
         torch.testing.assert_close(result.future_delta, result.delta_latent[:, :, 1:])
         self.assertTrue(result.valid)
 
+    def test_oracle_masks_become_clipped_per_frame_box_prompts(self) -> None:
+        masks = np.zeros((1, 1, 2, 10, 12), dtype=bool)
+        masks[0, 0, 0, 0:2, 1:4] = True
+        prompts = boxes_from_binary_masks(
+            masks,
+            camera_names=("image",),
+            entity_ids=("item",),
+            source="test_oracle",
+            padding_px=2,
+        )
+        np.testing.assert_array_equal(prompts.boxes_xyxy[0, 0, 0], [0, 0, 6, 4])
+        self.assertTrue(prompts.valid[0, 0, 0])
+        self.assertFalse(prompts.valid[0, 0, 1])
+
 
 class FileServiceTests(unittest.TestCase):
     def test_filesystem_provider_validates_and_caches_response(self) -> None:
@@ -143,6 +158,7 @@ class FileServiceTests(unittest.TestCase):
                             "status": "ok",
                             "model_identity": "test-model",
                             "output_probability_threshold": 0.5,
+                            "prompt_mode": "text_video",
                         }
                     ),
                     encoding="utf-8",
@@ -157,6 +173,61 @@ class FileServiceTests(unittest.TestCase):
             self.assertTrue(first.masks.all())
             self.assertTrue(np.array_equal(first.masks, second.masks))
             self.assertEqual(len(list((queue / "cache").glob("*.npz"))), 1)
+
+    def test_box_service_serializes_structured_prompts(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            queue = Path(directory)
+            provider = FileServiceMaskProvider(
+                queue,
+                model_identity="box-model",
+                timeout_seconds=2.0,
+                poll_seconds=0.01,
+                prompt_mode="box_per_frame",
+            )
+            videos = {"image": np.zeros((2, 8, 8, 3), dtype=np.uint8)}
+            entities = (EntitySpec("item", "manipulated", "item"),)
+            prompts = BoxPromptBatch(
+                camera_names=("image",),
+                entity_ids=("item",),
+                boxes_xyxy=np.asarray([[[[1, 1, 5, 5], [2, 2, 6, 6]]]], dtype=np.float32),
+                valid=np.ones((1, 1, 2), dtype=bool),
+                source="test_boxes",
+            )
+
+            def respond() -> None:
+                while not list((queue / "requests").glob("*.json")):
+                    time.sleep(0.005)
+                request_path = next((queue / "requests").glob("*.json"))
+                request = json.loads(request_path.read_text(encoding="utf-8"))
+                with np.load(queue / "requests" / request["payload_file"]) as payload:
+                    np.testing.assert_array_equal(
+                        payload["prompt_boxes_xyxy"], prompts.boxes_xyxy
+                    )
+                token = request_path.stem
+                masks = np.ones((1, 1, 2, 8, 8), dtype=bool)
+                np.savez_compressed(
+                    queue / "responses" / f"{token}.npz",
+                    packed_masks=np.packbits(masks.reshape(-1)),
+                    mask_shape=np.asarray(masks.shape, dtype=np.int64),
+                )
+                (queue / "responses" / f"{token}.json").write_text(
+                    json.dumps(
+                        {
+                            "schema_version": 1,
+                            "status": "ok",
+                            "model_identity": "box-model",
+                            "output_probability_threshold": 0.5,
+                            "prompt_mode": "box_per_frame",
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+            worker = threading.Thread(target=respond)
+            worker.start()
+            result = provider.segment(videos, entities, prompts)
+            worker.join()
+            self.assertTrue(result.masks.all())
 
 
 class AuditMetricTests(unittest.TestCase):

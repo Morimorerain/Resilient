@@ -26,6 +26,37 @@ class EntitySpec:
 
 
 @dataclass(frozen=True)
+class BoxPromptBatch:
+    """Audit-only per-frame box prompts aligned with cameras and entities."""
+
+    camera_names: tuple[str, ...]
+    entity_ids: tuple[str, ...]
+    boxes_xyxy: np.ndarray
+    valid: np.ndarray
+    source: str
+
+    def __post_init__(self) -> None:
+        boxes = np.asarray(self.boxes_xyxy)
+        valid = np.asarray(self.valid)
+        expected = (len(self.camera_names), len(self.entity_ids))
+        if boxes.ndim != 4 or boxes.shape[:2] != expected or boxes.shape[-1] != 4:
+            raise ValueError("Box prompts must have shape [camera, entity, time, 4].")
+        if valid.shape != boxes.shape[:-1] or valid.dtype != np.bool_:
+            raise ValueError("Box validity must be boolean [camera, entity, time].")
+        if not np.issubdtype(boxes.dtype, np.floating):
+            raise TypeError("Box prompts must use a floating-point dtype.")
+        selected = boxes[valid]
+        if selected.size and (
+            not np.isfinite(selected).all()
+            or np.any(selected[:, 2] <= selected[:, 0])
+            or np.any(selected[:, 3] <= selected[:, 1])
+        ):
+            raise ValueError("Valid box prompts must be finite, non-empty xyxy boxes.")
+        if not self.source:
+            raise ValueError("Box prompt provenance must be non-empty.")
+
+
+@dataclass(frozen=True)
 class MaskBatch:
     """Per-camera, per-entity binary masks aligned with a short video."""
 

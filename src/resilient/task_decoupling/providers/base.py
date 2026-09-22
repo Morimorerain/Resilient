@@ -6,7 +6,7 @@ from typing import Protocol
 
 import numpy as np
 
-from ..types import EntitySpec, MaskBatch
+from ..types import BoxPromptBatch, EntitySpec, MaskBatch
 
 
 class TaskMaskProvider(Protocol):
@@ -16,6 +16,7 @@ class TaskMaskProvider(Protocol):
         self,
         videos: dict[str, np.ndarray],
         entities: tuple[EntitySpec, ...],
+        prompt_hints: BoxPromptBatch | None = None,
     ) -> MaskBatch:
         """Segment uint8 camera videos shaped [T,H,W,3]."""
         ...

@@ -1025,6 +1025,41 @@ The default ignored output is
 ignored `data/.cache/task_decoupling_rpc/`. See `services/sam3/README.md` for service lifecycle and
 `configs/task_decoupling/sam3p1_local_blur.yaml` for every threshold and split.
 
+### Temporary HQ-SAM audit backend
+
+While gated SAM 3.1 access is pending, Gate 3 can be exercised with frozen HQ-SAM ViT-H through
+the same `MaskProvider` boundary. This temporary backend has no language grounding or temporal
+tracking: LIBERO instance masks are converted to per-camera, per-entity, per-frame bounding boxes,
+and HQ-SAM refines only those boxes. It is therefore an **oracle-prompted upper bound**, not a
+deployable Gate-1/Gate-3 result. `gate1_pass` and `gate3_residual_specificity_pass` remain `null` in
+its summary; the separately named mask-quality and upper-bound fields carry its diagnostic result.
+The Stage-II runtime explicitly rejects this provider.
+
+The official [HQ-SAM project](https://github.com/SysCV/sam-hq) publishes the ViT-H checkpoint at
+[this official download](https://drive.google.com/file/d/1qobFYrI4eyIANfBSmYcGuWRaSIXfMOQ8/view).
+It is Apache-2.0 licensed, has size 2,570,940,653 bytes and SHA-256
+`a7ac14a085326d9fa6199c8c698c4f0e7280afdbb974d2c4660ec60877b45e35`, and belongs at
+`checkpoints/sam_hq/sam_hq_vit_h.pth`. See `checkpoints/sam_hq/README.md` for the asset contract.
+The isolated environment uses uv 0.11.7, CPython 3.12.13, PyTorch 2.10.0/CUDA 12.8, and official
+`segment-anything-hq==0.3`:
+
+```bash
+bash scripts/resilient/create_samhq_environment.sh .venv-samhq
+
+CUDA_VISIBLE_DEVICES=0 .venv-samhq/bin/python services/sam_hq/server.py \
+  --queue-dir data/.cache/task_decoupling_rpc_samhq \
+  --checkpoint checkpoints/sam_hq/sam_hq_vit_h.pth
+
+# Reuse the already collected 40 clips; run the VAE analysis in the Fast-WAM environment.
+CUDA_VISIBLE_DEVICES=1 python scripts/resilient/audit_task_decoupling.py \
+  task_decoupling=samhq_oracle_box_local_blur
+```
+
+Ignored outputs go to
+`evaluate_results/task_decoupling/libero10_task7_joint1_half_samhq_oracle_box/`. Replacing this
+backend later requires only selecting `task_decoupling=sam3p1_local_blur`; downstream
+counterfactual, VAE, and metric code is shared.
+
 ## Extension switches and baseline protection
 
 The following policy is mandatory:
@@ -1051,7 +1086,7 @@ The repository separates lightweight CI checks from the full GPU environment:
 ```bash
 python -m pip install -r requirements-ci.txt
 PYTHONPATH=src python -m pytest -m "not gpu and not libero"
-ruff check src/resilient tests scripts/resilient services/sam3
+ruff check src/resilient tests scripts/resilient services
 ```
 
 Delete one-off debug scripts and outputs after use. Durable GPU/LIBERO checks belong in `tests/integration/` and must be explicitly marked.

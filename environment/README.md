@@ -59,3 +59,22 @@ Checkpoint access, license, destination, size, and SHA-256 are documented in
 `checkpoints/sam3/README.md`. Start the service using `services/sam3/README.md`; never upgrade the
 main Fast-WAM environment to satisfy SAM dependencies. Once generated,
 `pip-freeze-sam3-cu128.txt` is the complete validated direct/transitive snapshot.
+
+## Temporary HQ-SAM audit service
+
+While SAM 3.1 checkpoint access is pending, the Gate-3 upper-bound audit can use frozen HQ-SAM
+ViT-H with simulator-oracle per-frame box prompts. This is a separate provider implementing the
+same mask response contract; it is not a text/video tracker and is rejected by the Stage-II
+training integration.
+
+```bash
+bash scripts/resilient/create_samhq_environment.sh .venv-samhq
+```
+
+The environment uses uv 0.11.7, CPython 3.12.13, PyTorch 2.10.0/CUDA 12.8, and the pinned official
+`segment-anything-hq==0.3` package. Dependencies are in `requirements-samhq.txt` and
+`environment-samhq.yml`; `pip-freeze-samhq-cu128.txt` is the complete validated dependency closure.
+Checkpoint URL, Apache-2.0 license, destination, layout, size, and SHA-256
+are in `checkpoints/sam_hq/README.md`. Service commands and the audit-only limitation are in
+`services/sam_hq/README.md`. By default the helper reuses the ignored SAM 3.1 uv wheel cache because
+both services pin the same PyTorch/CUDA stack; override it with `RESILIENT_SAMHQ_CACHE_DIR`.

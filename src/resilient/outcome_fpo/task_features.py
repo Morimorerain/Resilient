@@ -25,6 +25,11 @@ def build_task_disentangler(
     if section is None or not bool(section.get("enabled", False)):
         return None
     validate_task_decoupling_config(section)
+    if str(section.mask_provider.type) != "sam3_file_service":
+        raise ValueError(
+            "Stage-II task features require the deployable SAM 3.1 text-video provider; "
+            "the oracle-box HQ-SAM backend is audit-only."
+        )
 
     def resolve(path: str) -> Path:
         value = Path(path)
@@ -44,6 +49,7 @@ def build_task_disentangler(
         timeout_seconds=float(section.mask_provider.timeout_seconds),
         poll_seconds=float(section.mask_provider.poll_seconds),
         cache_enabled=bool(section.mask_provider.cache_enabled),
+        prompt_mode=str(section.mask_provider.prompt_mode),
     )
     return TaskRegionDisentangler(
         mask_provider=provider,

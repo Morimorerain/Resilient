@@ -4,6 +4,7 @@ AILOG/
 # Python environments and caches.
 .venv/
 .venv-sam3/
+.venv-samhq/
 venv/
 ENV/
 __pypackages__/
@@ -41,6 +42,9 @@ checkpoints/**
 !checkpoints/sam3/
 !checkpoints/sam3/README.md
 !checkpoints/sam3/.gitkeep
+!checkpoints/sam_hq/
+!checkpoints/sam_hq/README.md
+!checkpoints/sam_hq/.gitkeep
 
 # Generated experiment outputs.
 outputs/
