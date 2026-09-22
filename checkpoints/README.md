@@ -4,6 +4,10 @@ Downloaded LIBERO and RoboTwin FastWAM weights are stored under
 `checkpoints/fastwam_release/`; Wan text encoder, tokenizer, and VAE components use their provider
 layouts below `checkpoints/`. All weights are ignored by Git.
 
+The task-region audit also uses the separately licensed, gated SAM 3.1 checkpoint. Its official
+URL, SAM License, exact destination, size, checksum, and authenticated download command are in
+[`sam3/README.md`](sam3/README.md).
+
 The official RoboTwin checkpoint comes from <https://huggingface.co/yuanty/fastwam> at revision
 `8eaceeb24c3cc92ff2a9c9a9d266a4941b836705`. The model card does not state a weight license, so
 download it for reproduction but do not redistribute it without publisher clarification.

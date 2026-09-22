@@ -882,6 +882,70 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 \
 
 参考硬件为 Linux、CUDA 12.8、bf16 与四张 RTX 6000 Ada 48 GB。
 
+## Stage II 任务区域解耦审计
+
+可选的任务区域路径先把任务物体证据与机器人本体运动分离，再决定是否允许它影响 Stage II
+目标。当前它严格属于**仅审计的特征提取器**：默认
+`task_decoupling.enabled=false`；即使以 `mode=audit` 启用，也只记录特征，不改变现有
+Outcome-FPO reward 或优化器。在下面的门控通过前，不能把它宣称为因果表征或 Fault 表征。
+
+实现位于 `src/resilient/task_decoupling/`；固定任务实体与 prompt 位于
+`configs/task_entities/`；mask 推理由 `services/sam3/` 下的独立 SAM 3.1 服务完成；
+`src/resilient/outcome_fpo/task_features.py` 是唯一的 Stage II 接入边界。生成 mask 时保持两个
+相机分离，之后严格复用已发布 Fast-WAM 的裁剪、缩放、相机顺序、拼接、归一化和冻结 VAE
+路径。局部 Gaussian blur 反事实只改变任务 mask 内的像素。审计残差定义为：
+
+```text
+Delta_task = VAE(完整真实未来视频) - VAE(仅模糊任务区域的真实未来视频)
+```
+
+并排除第一个 latent slice。LIBERO instance segmentation 只作为审计 oracle，训练和部署均不可
+读取。
+
+外部资产是官方 gated
+[`facebook/sam3.1`](https://huggingface.co/facebook/sam3.1) 中的
+`sam3.1_multiplex.pt`，适用官方 SAM License。文件大小为3,502,755,717字节，应放到
+`checkpoints/sam3/sam3.1_multiplex.pt`，SHA-256为
+`0567debeec80ba4ac6369540c6c248025283cb3ff2b92827509e57e2b3541cb6`。源码固定为
+`facebookresearch/sam3`提交`2345a4ad109ac29c569da749c91d84f10dc08c40`。权重由Git忽略，
+访问申请与下载命令见`checkpoints/sam3/README.md`。
+
+首个维护审计使用 `libero_10` task 7 与仿真器底层 joint-1 retention=0.5 Fault。它复放现有
+Stage I 的训练状态 40--49：40--47 用于 probe 拟合，48--49 作为内部留出审计状态，绝不读取
+正式验证状态。门控定义如下：
+
+| Gate | 必须提供的证据 |
+| --- | --- |
+| 0 | 共享预处理以及复放首帧与 Stage I 输入严格一致 |
+| 1 | SAM mask 与仿真器 instance mask 对比 IoU/recall、时序 IoU 和机器人污染率 |
+| 2 | mask 外像素逐值相同；完整/反事实视频在同一个冻结 VAE batch 中编码 |
+| 3 | SAM residual 与 oracle residual 的一致性显著高于等面积平移 mask 对照；在留出状态上分别报告任务进展、joint-1 运动 probe 与有效秩 |
+
+先按 `checkpoints/sam3/README.md` 创建独立环境并取得带 SHA-256 校验的 gated checkpoint。
+已验证服务环境使用 uv 0.11.7、CPython 3.12.13、PyTorch 2.10.0/CUDA 12.8 和
+`requirements-sam3.txt`：
+
+```bash
+bash scripts/resilient/create_sam3_environment.sh .venv-sam3
+
+CUDA_VISIBLE_DEVICES=0 .venv-sam3/bin/python services/sam3/server.py \
+  --queue-dir data/.cache/task_decoupling_rpc \
+  --checkpoint checkpoints/sam3/sam3.1_multiplex.pt
+
+# 终端 2，Fast-WAM/LIBERO 环境：确定性仿真复放。
+python scripts/resilient/audit_task_decoupling.py \
+  task_decoupling.audit.phase=collect
+
+# 终端 2，Fast-WAM/LIBERO 环境：冻结 VAE Gate 3 分析。
+CUDA_VISIBLE_DEVICES=1 python scripts/resilient/audit_task_decoupling.py \
+  task_decoupling.audit.phase=analyze
+```
+
+默认输出位于 Git 忽略的
+`evaluate_results/task_decoupling/libero10_task7_joint1_half/`；SAM 请求与缓存位于 Git 忽略的
+`data/.cache/task_decoupling_rpc/`。服务生命周期见 `services/sam3/README.md`，全部阈值和划分见
+`configs/task_decoupling/sam3p1_local_blur.yaml`。
+
 ## 扩展开关与基线保护
 
 以下规则为强制要求：
@@ -899,6 +963,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 \
 | `EVALUATION.opsd_adapter.enabled` | `false` | 在 Fast-WAM 基座 checkpoint 后注入并加载 OPSD LoRA | 关闭时不注入任何模块，基线评测不变 |
 | `EVALUATION.fault_detection.enabled` | `false` | 在 LIBERO 评测中采集严格对齐的 Video DiT/VAE latent 指标 | 关闭时不执行联合视频推理、真实 latent 编码或指标输出 |
 | `FastWAM.infer_joint` 的 `return_video_latents` / `decode_video` | `false` / `true` | 暴露最终视频 latent，并允许 Fault 指标跳过图像解码 | 默认值保持原来的 `video`/`action` 返回与解码行为 |
+| `task_decoupling.enabled` | `false` | 在 Stage II rollout 边界执行 SAM 任务 mask 反事实特征提取 | 关闭时无服务调用、VAE 编码、元数据、reward 或优化器变化 |
 
 ## 开发检查
 
@@ -907,7 +972,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 \
 ```bash
 python -m pip install -r requirements-ci.txt
 PYTHONPATH=src python -m pytest -m "not gpu and not libero"
-ruff check src/resilient tests scripts/resilient
+ruff check src/resilient tests scripts/resilient services/sam3
 ```
 
 一次性调试脚本和输出使用后必须删除。可长期复用的 GPU/LIBERO 检查放入 `tests/integration/` 并添加明确标记。

@@ -1,0 +1,58 @@
+# @package task_decoupling
+
+# Disabled preserves the existing Stage-II rollout, reward, and optimizer path.
+enabled: false
+mode: audit
+
+entities:
+  config: configs/task_entities/libero_10_task7.yaml
+
+mask_provider:
+  type: sam3_file_service
+  queue_dir: data/.cache/task_decoupling_rpc
+  timeout_seconds: 300.0
+  poll_seconds: 0.1
+  cache_enabled: true
+  model_identity: sam3.1:2345a4ad109ac29c569da749c91d84f10dc08c40:0567debeec80ba4ac6369540c6c248025283cb3ff2b92827509e57e2b3541cb6
+
+segmentation:
+  output_probability_threshold: 0.5
+  minimum_component_area_px: 16
+  fill_hole_area_px: 64
+  dilation_radius_px: 5
+  empty_mask_policy: invalid
+
+counterfactual:
+  type: local_gaussian_blur
+  sigma_short_edge_ratio: 0.08
+  edge_feather_px: 0
+
+latent:
+  encoder: frozen_fastwam_vae
+  batch_full_and_counterfactual: true
+  exclude_initial_latent: true
+
+artifacts:
+  save_every_n_groups: 25
+  output_dir: evaluate_results/task_decoupling/libero10_task7_joint1_half
+
+audit:
+  phase: collect
+  # Training states 40--49 form an internal audit split; official validation states stay unseen.
+  state_indices: [40, 41, 42, 43, 44, 45, 46, 47, 48, 49]
+  train_state_indices: [40, 41, 42, 43, 44, 45, 46, 47]
+  test_state_indices: [48, 49]
+  # Stage-I trajectories contain 271 actions, so the last exact 32-action window starts at 239.
+  anchor_steps: [0, 80, 160, 239]
+  future_frame_steps: [0, 4, 8, 12, 16, 20, 24, 28, 32]
+  ridge_regularization: 10.0
+  random_seed: 42
+  save_overlays: true
+  overlay_every_n_samples: 4
+  gates:
+    minimum_union_recall: 0.90
+    minimum_union_iou: 0.65
+    minimum_entity_recall: 0.75
+    maximum_robot_contamination: 0.05
+    minimum_temporal_iou: 0.75
+    residual_cosine_margin_over_shifted_control: 0.15

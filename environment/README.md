@@ -40,3 +40,22 @@ snapshot. `environment-robotwin.yml` bootstraps the Conda packages but intention
 the CuRobo no-build-isolation step; run the helper's final two commands afterward.
 
 `environment.yml` is an equivalent Conda bootstrap specification for LIBERO, but the uv path is the validated reference environment. Run `conda env create -f environment/environment.yml` from the repository root. Do not update packages interactively without updating the applicable `requirements*.txt`, `pyproject.toml`, lock snapshot, and both root README files. A hardware snapshot belongs in ignored `AILOG/` during development.
+
+## SAM 3.1 task-mask service
+
+Task-region decoupling deliberately keeps Meta SAM 3.1 outside the Python 3.10 Fast-WAM
+environment. The validated service uses uv 0.11.7, CPython 3.12.13, and PyTorch 2.10.0/CUDA 12.8.
+Create the isolated environment with:
+
+```bash
+bash scripts/resilient/create_sam3_environment.sh .venv-sam3
+```
+
+The helper keeps uv downloads and temporary wheel extraction under ignored `AILOG/` so a small
+system partition is not exhausted. Override those repository-relative defaults with
+`RESILIENT_SAM3_CACHE_DIR` and `RESILIENT_SAM3_TMPDIR` when required.
+
+Checkpoint access, license, destination, size, and SHA-256 are documented in
+`checkpoints/sam3/README.md`. Start the service using `services/sam3/README.md`; never upgrade the
+main Fast-WAM environment to satisfy SAM dependencies. Once generated,
+`pip-freeze-sam3-cu128.txt` is the complete validated direct/transitive snapshot.

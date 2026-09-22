@@ -43,6 +43,11 @@ from libero.libero import benchmark, get_libero_path
 from resilient.faults import build_fault_pipeline
 from resilient.fault_detection import EpisodeLatentAccumulator
 from resilient.state_banks import assert_disjoint_manifests, load_manifest, load_task_states
+from resilient.task_decoupling.preprocessing import (
+    concatenate_cameras,
+    preprocess_libero_cameras,
+    rgb_to_model_tensor,
+)
 from experiments.libero.action_ensembler import ActionEnsembler
 
 OmegaConf.register_new_resolver("eval", eval)
@@ -198,18 +203,6 @@ def _load_opsd_adapter(model: torch.nn.Module, cfg: DictConfig) -> None:
     )
 
 
-def _center_crop_resize(image: np.ndarray, width: int, height: int) -> np.ndarray:
-    pil_image = Image.fromarray(image)
-    src_w, src_h = pil_image.size
-    scale = max(width / src_w, height / src_h)
-    resized = pil_image.resize((round(src_w * scale), round(src_h * scale)), resample=Image.BILINEAR)
-    rw, rh = resized.size
-    left = max((rw - width) // 2, 0)
-    top = max((rh - height) // 2, 0)
-    cropped = resized.crop((left, top, left + width, top + height))
-    return np.asarray(cropped, dtype=np.uint8)
-
-
 def _normalize_proprio(
     proprio: np.ndarray,
     processor: FastWAMProcessor,
@@ -236,7 +229,6 @@ def _obs_to_model_input(
     device: str,
     dtype: torch.dtype,
 ):
-    imgs = get_libero_image(obs)
     image_meta = processor.shape_meta["images"]
     if len(image_meta) < int(processor.num_output_cameras):
         raise ValueError(
@@ -244,30 +236,11 @@ def _obs_to_model_input(
             f"but num_output_cameras={processor.num_output_cameras}."
         )
 
-    def _meta_to_hw(meta: dict, camera_idx: int) -> tuple[int, int]:
-        shape = meta["shape"]
-        if len(shape) != 3:
-            raise ValueError(f"shape_meta.images[{camera_idx}].shape must be [C,H,W], got {shape}")
-        return int(shape[1]), int(shape[2])
-
     concatenation = cfg.data.train.get("concat_multi_camera", "horizontal")
     num_cameras = processor.num_output_cameras
-    if num_cameras == 1:
-        primary_h, primary_w = _meta_to_hw(image_meta[0], camera_idx=0)
-        rgb = _center_crop_resize(imgs["image"], width=primary_w, height=primary_h)
-    elif num_cameras == 2:
-        primary_h, primary_w = _meta_to_hw(image_meta[0], camera_idx=0)
-        wrist_h, wrist_w = _meta_to_hw(image_meta[1], camera_idx=1)
-        primary = _center_crop_resize(imgs["image"], width=primary_w, height=primary_h)
-        wrist = _center_crop_resize(imgs["wrist_image"], width=wrist_w, height=wrist_h)
-        if concatenation == "horizontal":
-            rgb = np.concatenate([primary, wrist], axis=1)
-        elif concatenation == "vertical":
-            rgb = np.concatenate([primary, wrist], axis=0)
-        else:
-            raise ValueError(f"Invalid concat_multi_camera: {concatenation}")
-    else:
-        raise ValueError(f"LIBERO eval currently supports num_output_cameras in [1, 2], got {num_cameras}.")
+    cameras = preprocess_libero_cameras(obs, processor)
+    camera_order = ("image",) if num_cameras == 1 else ("image", "wrist_image")
+    rgb = concatenate_cameras(cameras, camera_order=camera_order, mode=concatenation)
 
     actual_h, actual_w = int(rgb.shape[0]), int(rgb.shape[1])
     expected_h, expected_w = int(height), int(width)
@@ -279,12 +252,11 @@ def _obs_to_model_input(
         f"shape_meta.images={image_shapes}, concat_multi_camera={concatenation}."
     )
 
-    x = torch.tensor(rgb).permute(2, 0, 1).unsqueeze(0).to(device=device, dtype=dtype)
-    x = x * (2.0 / 255.0) - 1.0
+    x = rgb_to_model_tensor(rgb, device=device, dtype=dtype)
 
     proprio = _normalize_proprio(_extract_sim_state(obs), processor)
 
-    return x, proprio, imgs
+    return x, proprio, get_libero_image(obs)
 
 
 def _extract_sim_state(obs: dict) -> np.ndarray:

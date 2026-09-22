@@ -7,7 +7,7 @@ import time
 import imageio
 import numpy as np
 from libero.libero import get_libero_path
-from libero.libero.envs import OffScreenRenderEnv, SubprocVectorEnv
+from libero.libero.envs import OffScreenRenderEnv, SegmentationRenderEnv, SubprocVectorEnv
 from PIL import Image, ImageDraw
 
 from fastwam.utils.video_io import save_mp4
@@ -26,6 +26,7 @@ def get_libero_env(
     fault_pipeline=None,
     fault_episode_index=0,
     controller=None,
+    segmentation=False,
 ):
     """Initialize LIBERO with an optional controller override for diagnostics."""
     task_description = task.language
@@ -41,8 +42,12 @@ def get_libero_env(
     }
     if controller is not None:
         env_args["controller"] = str(controller)
+    if segmentation and env_num > 1:
+        raise ValueError("Segmentation audit currently supports one LIBERO environment.")
     if env_num > 1:
         env = SubprocVectorEnv([lambda: OffScreenRenderEnv(**env_args) for _ in range(env_num)])
+    elif segmentation:
+        env = SegmentationRenderEnv(**env_args)
     else:
         env = OffScreenRenderEnv(**env_args)
     env.seed(

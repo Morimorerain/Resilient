@@ -956,6 +956,75 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 \
 
 Hardware remains Linux, CUDA 12.8, bf16, and four RTX 6000 Ada 48 GB GPUs.
 
+## Stage-II task-region decoupling audit
+
+The optional task-region path isolates task-object evidence from robot/body motion before it is
+allowed to affect the Stage-II objective. It is currently an **audit-only feature extractor**:
+`task_decoupling.enabled=false` is the default, and even when enabled with `mode=audit` it records
+features but leaves the existing Outcome-FPO reward and optimizer unchanged. It must not be called
+a causal or fault representation until the gates below pass.
+
+The implementation lives under `src/resilient/task_decoupling/`. Fixed task entities and prompts
+are declared in `configs/task_entities/`; mask inference runs in the isolated SAM 3.1 service under
+`services/sam3/`; and `src/resilient/outcome_fpo/task_features.py` is the only Stage-II integration
+boundary. The two-camera video is kept separate while masks are generated, then reconstructed with
+the exact released Fast-WAM crop, resize, camera order, concatenation, normalization, and frozen
+VAE path. A local Gaussian-blur counterfactual changes task-mask pixels only. The audited residual
+is:
+
+```text
+Delta_task = VAE(full realized video) - VAE(task-region-blurred realized video)
+```
+
+The initial latent slice is excluded. LIBERO instance segmentation is used only as an audit oracle
+and is never available to training or deployment.
+
+The external asset is the gated official
+[`facebook/sam3.1`](https://huggingface.co/facebook/sam3.1) `sam3.1_multiplex.pt`, covered by the
+official SAM License. Store its 3,502,755,717 bytes at
+`checkpoints/sam3/sam3.1_multiplex.pt`; its SHA-256 is
+`0567debeec80ba4ac6369540c6c248025283cb3ff2b92827509e57e2b3541cb6`. The source implementation
+is pinned to `facebookresearch/sam3` commit
+`2345a4ad109ac29c569da749c91d84f10dc08c40`. The asset is ignored by Git; full access and download
+instructions are in `checkpoints/sam3/README.md`.
+
+The first maintained audit uses `libero_10` task 7 and the simulator-owned joint-1 retention-0.5
+Fault. It replays existing Stage-I actions for training states 40--49, uses states 40--47 for probe
+fitting and states 48--49 as internal held-out audit states, and never reads official validation
+states. Its gates are:
+
+| Gate | Required evidence |
+| --- | --- |
+| 0 | Shared preprocessing and replayed first frame exactly preserve the Stage-I input |
+| 1 | SAM masks are compared with simulator instance masks for IoU/recall, temporal IoU, and robot contamination |
+| 2 | Pixels outside the mask are bit-identical and full/counterfactual videos use one frozen-VAE batch |
+| 3 | SAM residual agrees with oracle residual more than an area-matched shifted-mask control; held-out probes report task progress versus joint-1 motion and effective rank |
+
+Create the separate SAM environment and obtain the checksum-pinned gated checkpoint as documented
+in `checkpoints/sam3/README.md`. The validated service environment uses uv 0.11.7, CPython 3.12.13,
+PyTorch 2.10.0/CUDA 12.8, and `requirements-sam3.txt`; then run:
+
+```bash
+bash scripts/resilient/create_sam3_environment.sh .venv-sam3
+
+CUDA_VISIBLE_DEVICES=0 .venv-sam3/bin/python services/sam3/server.py \
+  --queue-dir data/.cache/task_decoupling_rpc \
+  --checkpoint checkpoints/sam3/sam3.1_multiplex.pt
+
+# Fast-WAM/LIBERO environment, terminal 2: deterministic simulator replay.
+python scripts/resilient/audit_task_decoupling.py \
+  task_decoupling.audit.phase=collect
+
+# Fast-WAM/LIBERO environment, terminal 2: frozen-VAE Gate-3 analysis.
+CUDA_VISIBLE_DEVICES=1 python scripts/resilient/audit_task_decoupling.py \
+  task_decoupling.audit.phase=analyze
+```
+
+The default ignored output is
+`evaluate_results/task_decoupling/libero10_task7_joint1_half/`; SAM request/cache files stay under
+ignored `data/.cache/task_decoupling_rpc/`. See `services/sam3/README.md` for service lifecycle and
+`configs/task_decoupling/sam3p1_local_blur.yaml` for every threshold and split.
+
 ## Extension switches and baseline protection
 
 The following policy is mandatory:
@@ -973,6 +1042,7 @@ The following policy is mandatory:
 | `EVALUATION.opsd_adapter.enabled` | `false` | Inject and load an OPSD LoRA adapter after the base Fast-WAM checkpoint | No modules are injected and base evaluation is unchanged when false |
 | `EVALUATION.fault_detection.enabled` | `false` | Collect time-aligned Video DiT/VAE latent metrics during LIBERO evaluation | No joint video inference, latent encoding, or metric files are produced when false |
 | `return_video_latents` / `decode_video` in `FastWAM.infer_joint` | `false` / `true` | Expose final video latents and optionally avoid decoding for fault metrics | Original `video`/`action` result and decoding are unchanged at defaults |
+| `task_decoupling.enabled` | `false` | Run SAM task-mask counterfactual extraction at the Stage-II rollout boundary | No service call, VAE encoding, metadata, reward, or optimizer change when false |
 
 ## Development checks
 
@@ -981,7 +1051,7 @@ The repository separates lightweight CI checks from the full GPU environment:
 ```bash
 python -m pip install -r requirements-ci.txt
 PYTHONPATH=src python -m pytest -m "not gpu and not libero"
-ruff check src/resilient tests scripts/resilient
+ruff check src/resilient tests scripts/resilient services/sam3
 ```
 
 Delete one-off debug scripts and outputs after use. Durable GPU/LIBERO checks belong in `tests/integration/` and must be explicitly marked.

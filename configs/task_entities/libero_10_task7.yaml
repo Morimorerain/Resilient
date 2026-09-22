@@ -1,0 +1,18 @@
+suite: libero_10
+task_id: 7
+instruction: put both the alphabet soup and the cream cheese box in the basket
+
+# Prompts are fixed noun phrases. Oracle names are audit-only and must never be read by training.
+entities:
+  - id: alphabet_soup
+    role: manipulated
+    prompt: alphabet soup can
+    oracle_instances: [alphabet_soup_1]
+  - id: cream_cheese
+    role: manipulated
+    prompt: cream cheese box
+    oracle_instances: [cream_cheese_1]
+  - id: basket
+    role: goal
+    prompt: basket
+    oracle_instances: [basket_1]

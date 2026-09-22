@@ -51,6 +51,7 @@ from .collector import (
 )
 from .outcome import FrozenNominalOutcomeTeacher, outcome_cosine_reward
 from .policy import FastWAMFPOScoringModule, sample_action_chunk, sample_cfm_pairs
+from .task_features import build_task_disentangler, extract_task_features
 from .trainer import OutcomeFPOTrainer
 from .types import ActionConditioning, CandidateSample, OutcomeGroup
 
@@ -612,6 +613,7 @@ def _collect_group(
             ),
             rand_device=str(section.rollout.rand_device),
         )
+        task_disentangler = build_task_disentangler(cfg, project_root=Path.cwd())
 
         def encode_observation(item: Any) -> torch.Tensor:
             image, _, _ = _obs_to_model_input(
@@ -658,6 +660,19 @@ def _collect_group(
                 action,
                 frame_steps=section.rollout.future_frame_steps,
             )
+            task_feature_metadata: dict[str, Any] = {}
+            if task_disentangler is not None:
+                residual, _ = extract_task_features(
+                    task_disentangler,
+                    observations=future.observations,
+                    processor=processor,
+                    model=model,
+                )
+                task_feature_metadata = {
+                    "task_decoupling_valid": residual.valid,
+                    "task_decoupling_statistics": residual.mask_statistics,
+                    "task_decoupling_provenance": residual.provenance,
+                }
             video = stack_observation_video(future.observations, encode_observation)
             realized_hidden = teacher.encode_realized(video, conditioning, target)
             reward = float(outcome_cosine_reward(realized_hidden, target))
@@ -689,6 +704,7 @@ def _collect_group(
                         "candidate_index": candidate_index,
                         "cfm_seed": cfm_seed,
                         "counterfactual_success": future.success,
+                        **task_feature_metadata,
                     },
                 )
             )
@@ -861,6 +877,14 @@ def run_outcome_fpo_training(cfg: DictConfig) -> None:
                                 ],
                                 "counterfactual_success": [
                                     item.metadata["counterfactual_success"]
+                                    for item in group.candidates
+                                ],
+                                "task_decoupling": [
+                                    {
+                                        key: value
+                                        for key, value in item.metadata.items()
+                                        if key.startswith("task_decoupling_")
+                                    }
                                     for item in group.candidates
                                 ],
                             }
