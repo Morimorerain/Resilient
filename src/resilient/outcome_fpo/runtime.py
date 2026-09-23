@@ -1004,3 +1004,5 @@ def run_outcome_fpo_training(cfg: DictConfig) -> None:
             trainer.global_step,
         )
         completed_in_epoch = 0
+    accelerator.wait_for_everyone()
+    accelerator.end_training()
