@@ -226,6 +226,24 @@ class FrozenNominalOutcomeTeacher:
                 video.to(device=model.device, dtype=model.torch_dtype),
                 tiled=False,
             )
+        return self.encode_realized_latent(latent, conditioning, target)
+
+    @torch.no_grad()
+    def encode_realized_latent(
+        self,
+        latent: torch.Tensor,
+        conditioning: ActionConditioning,
+        target: OutcomeTarget,
+    ) -> torch.Tensor:
+        """Score a pre-encoded candidate latent with the target perturbation.
+
+        This entry point lets task-region counterfactual audits reuse the frozen
+        VAE output instead of encoding the same realized video a second time.
+        """
+        model = self.model
+        with lora_disabled(model):
+            model.eval()
+            latent = latent.to(device=model.device, dtype=model.torch_dtype)
             if latent.shape != target.noise.shape:
                 raise ValueError(
                     f"Realized latent shape {tuple(latent.shape)} does not match target "

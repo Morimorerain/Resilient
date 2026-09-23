@@ -21,6 +21,7 @@ from resilient.task_decoupling.audit import (
 from resilient.task_decoupling.config import validate_task_decoupling_config
 from resilient.task_decoupling.counterfactual import build_local_blur_counterfactual
 from resilient.task_decoupling.entities import load_entity_specification
+from resilient.task_decoupling.gate4 import evaluate_gate4, summarize_gate4_rows
 from resilient.task_decoupling.pipeline import TaskRegionDisentangler
 from resilient.task_decoupling.prompts import boxes_from_binary_masks
 from resilient.task_decoupling.providers.file_service import FileServiceMaskProvider
@@ -255,6 +256,62 @@ class AuditMetricTests(unittest.TestCase):
     def test_mask_contract_rejects_non_boolean_arrays(self) -> None:
         with self.assertRaises(TypeError):
             MaskBatch(("image",), ("item",), np.zeros((1, 1, 2, 4, 4), dtype=np.uint8))
+
+    def test_gate4_uses_only_complete_valid_groups(self) -> None:
+        rows = []
+        for state_index in (35, 36):
+            for candidate_index in range(4):
+                progress = float(candidate_index)
+                rows.append(
+                    {
+                        "group_id": f"state_{state_index}",
+                        "group_size": 4,
+                        "state_index": state_index,
+                        "mask_valid": not (state_index == 36 and candidate_index == 0),
+                        "terminal_before_anchor": False,
+                        "task_progress": progress,
+                        "joint1_motion": float((candidate_index + 1) % 4),
+                        "reward_full": -progress,
+                        "reward_counterfactual": 0.0,
+                        "reward_margin": progress,
+                        "reward_task_direction": progress,
+                    }
+                )
+        summary = summarize_gate4_rows(
+            rows,
+            state_indices=[35, 36],
+            minimum_reward_std=1.0e-4,
+            progress_tolerance=1.0e-4,
+        )
+        self.assertEqual(summary["requested_group_count"], 2)
+        self.assertEqual(summary["valid_group_count"], 1)
+        self.assertEqual(
+            summary["rewards"]["reward_task_direction"]["pairwise_accuracy"], 1.0
+        )
+        decision = evaluate_gate4(
+            {
+                "valid_group_fraction": 1.0,
+                "rewards": {
+                    "reward_task_direction": {
+                        "pairwise_accuracy": 0.8,
+                        "active_group_fraction": 1.0,
+                        "motion_partial_correlation": 0.1,
+                    },
+                    "reward_full": {
+                        "pairwise_accuracy": 0.6,
+                        "motion_partial_correlation": 0.4,
+                    },
+                },
+            },
+            {
+                "minimum_valid_group_fraction": 0.5,
+                "minimum_pairwise_accuracy": 0.6,
+                "minimum_pairwise_accuracy_improvement_over_full": 0.05,
+                "minimum_active_group_fraction": 0.8,
+                "maximum_abs_motion_partial_correlation": 1.0,
+            },
+        )
+        self.assertTrue(decision["passed"])
 
 
 if __name__ == "__main__":

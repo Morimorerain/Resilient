@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import numpy as np
 import torch
 import torch.nn as nn
 from omegaconf import OmegaConf
@@ -30,6 +31,11 @@ from resilient.outcome_fpo.runtime import (
 )
 from resilient.outcome_fpo.trainer import OutcomeFPOTrainer
 from resilient.outcome_fpo.types import ActionConditioning, CandidateSample, OutcomeGroup
+from resilient.task_decoupling.reward import (
+    group_ranking_metrics,
+    task_outcome_rewards,
+    within_group_motion_partial_correlation,
+)
 
 
 class FPOObjectiveTests(unittest.TestCase):
@@ -81,6 +87,34 @@ class OutcomeRewardTests(unittest.TestCase):
         reward = outcome_cosine_reward(shifted, target)
         self.assertTrue(torch.isfinite(reward))
         self.assertGreater(float(reward), 0.99)
+
+    def test_task_reward_decomposition_uses_counterfactual_difference(self) -> None:
+        target_hidden = torch.tensor([[[0.0, 0.0], [1.0, -1.0], [2.0, -2.0]]])
+        full_hidden = target_hidden.clone()
+        counterfactual_hidden = torch.zeros_like(target_hidden)
+        target = OutcomeTarget(
+            hidden=target_hidden,
+            noise=torch.empty(1),
+            timestep=torch.empty(1),
+            tokens_per_frame=1,
+        )
+        rewards = task_outcome_rewards(full_hidden, counterfactual_hidden, target)
+        self.assertGreater(float(rewards.full), 0.99)
+        self.assertGreater(float(rewards.margin), 0.99)
+        self.assertGreater(float(rewards.task_direction), 0.99)
+
+    def test_gate4_metrics_are_group_local(self) -> None:
+        group = np.asarray([0, 0, 0, 1, 1, 1])
+        progress = np.asarray([0.0, 1.0, 2.0, 10.0, 11.0, 12.0])
+        reward = np.asarray([0.0, 0.8, 2.1, 10.0, 11.2, 11.9])
+        metrics = group_ranking_metrics(reward, progress, group)
+        self.assertEqual(metrics["pair_count"], 6)
+        self.assertAlmostEqual(float(metrics["pairwise_accuracy"]), 1.0)
+        motion = np.asarray([2.0, 0.5, 0.2, 2.0, 1.5, 0.0])
+        correlation = within_group_motion_partial_correlation(
+            reward, progress, motion, group
+        )
+        self.assertTrue(np.isfinite(correlation))
 
     def test_cfm_pair_sampling_is_reproducible_and_independent(self) -> None:
         action = torch.zeros((32, 7))

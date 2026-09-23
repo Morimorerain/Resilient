@@ -979,6 +979,39 @@ Git 忽略的输出位于
 `evaluate_results/task_decoupling/libero10_task7_joint1_half_samhq_oracle_box/`。后续替换回
 SAM3.1 时只需选择 `task_decoupling=sam3p1_local_blur`；反事实、VAE 与指标实现完全复用。
 
+### Gate 4：任务区域解耦 outcome reward 审计
+
+Gate 4 只是离线有效性审计，**不会**修改 Outcome-FPO 的训练 reward。它构造40个同状态组
+（训练状态30--39，anchor为0/80/160/240）；Stage-I Student 对每组采样4个action chunk，并从
+完全相同的仿真器/Fault状态执行。冻结base Teacher使用相同Video DiT层、噪声和timestep，分别
+评价真实完整视频latent及其HQ-SAM任务区域反事实latent。输出包含全图reward、反事实reward、
+二者margin，以及预先固定的task-direction reward。候选排序与“物体到篮子的距离改善”比较，
+joint-1运动量作为干扰变量单独审计。状态30--34为开发集，35--39为未查看的内部留出集；不会
+读取正式验证状态。
+
+临时HQ-SAM路径有意采用单侧分解：只有真实候选被分解，因为box-prompt后端无法为Teacher预测
+视频取得仿真器框。因此即使通过，也只能视为oracle提示下的reward上界，不能直接开启正式
+Stage-II reward。在SAM3.1及Teacher target分解均验证前，必须保持
+`task_decoupling.enabled=false`。
+
+```bash
+# 终端1：一张GPU运行临时分割服务。
+CUDA_VISIBLE_DEVICES=0 .venv-samhq/bin/python services/sam_hq/server.py \
+  --queue-dir data/.cache/task_decoupling_rpc_samhq \
+  --checkpoint checkpoints/sam_hq/sam_hq_vit_h.pth
+
+# 终端2：四个相互独立的Fast-WAM审计rank。
+CUDA_VISIBLE_DEVICES=1,2,3,4 \
+AILOG/envs/resilient-fastwam-uv/bin/accelerate launch \
+  --config_file scripts/accelerate_configs/accelerate_inference_multi_gpu.yaml \
+  --num_processes 4 scripts/resilient/audit_task_reward.py
+```
+
+默认输出到Git忽略的
+`evaluate_results/task_decoupling/gate4_libero10_task7_joint1_half_samhq_oracle_box/`。固定划分、
+seed、第19层、timestep 500、group size 4、指标和通过阈值均在
+`configs/task_reward_audit/samhq_libero10_task7_joint1_half.yaml`中。
+
 ## 扩展开关与基线保护
 
 以下规则为强制要求：

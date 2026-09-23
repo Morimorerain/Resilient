@@ -1,0 +1,50 @@
+# @package _global_
+
+defaults:
+  - /two_stage_opsd/fastwam_libero10_task7_joint1_half
+  - override /task_decoupling: samhq_oracle_box_local_blur
+  - _self_
+
+two_stage_opsd:
+  mode: validate
+  stage2:
+    initial_adapter: runs/two_stage_opsd/libero10_task7_joint1_half_seed42/stage1/final/joint_adapter.pt
+
+task_reward_audit:
+  # This audit never changes the configured Stage-II training reward.
+  num_processes: 4
+  output_dir: evaluate_results/task_decoupling/gate4_libero10_task7_joint1_half_samhq_oracle_box
+  state_indices: [30, 31, 32, 33, 34, 35, 36, 37, 38, 39]
+  development_state_indices: [30, 31, 32, 33, 34]
+  heldout_state_indices: [35, 36, 37, 38, 39]
+  anchor_steps: [0, 80, 160, 240]
+  group_size: 4
+  environment_seed: 42040
+  inference_seed: 42041
+
+  labels:
+    manipulated_position_keys: [alphabet_soup_1_pos, cream_cheese_1_pos]
+    goal_position_key: basket_1_pos
+    joint_position_key: robot0_joint_pos
+    joint_index: 0
+
+  gates:
+    # Thresholds are fixed before the held-out results are inspected.
+    progress_tolerance: 1.0e-4
+    minimum_reward_std: 1.0e-4
+    minimum_valid_group_fraction: 0.80
+    minimum_active_group_fraction: 0.80
+    minimum_pairwise_accuracy: 0.60
+    minimum_pairwise_accuracy_improvement_over_full: 0.05
+    maximum_abs_motion_partial_correlation: 0.25
+
+task_decoupling:
+  enabled: false
+  mode: audit
+
+hydra:
+  job:
+    chdir: false
+  run:
+    dir: .
+  output_subdir: null

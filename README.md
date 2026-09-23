@@ -1060,6 +1060,42 @@ Ignored outputs go to
 backend later requires only selecting `task_decoupling=sam3p1_local_blur`; downstream
 counterfactual, VAE, and metric code is shared.
 
+### Gate 4: task-decoupled outcome-reward audit
+
+Gate 4 is an offline validity audit; it does **not** change the Outcome-FPO training reward. For
+each of 40 same-state groups (training states 30--39, anchors 0/80/160/240), the Stage-I Student
+samples four action chunks and executes them from the identical simulator/Fault state. The frozen
+base Teacher scores both the realized full-video latent and its HQ-SAM task-region
+counterfactual with the same Video DiT layer, noise, and timestep. The audit reports full reward,
+counterfactual reward, their margin, and the predeclared task-direction reward. Candidate ordering
+is evaluated against object-to-basket progress, while joint-1 motion is retained as a nuisance
+variable. States 30--34 are development data and 35--39 are untouched held-out audit data; no
+official validation state is read.
+
+The temporary HQ-SAM path is intentionally one-sided: only the realized candidate is decomposed,
+because the box-prompt backend cannot obtain simulator boxes for the Teacher's predicted video.
+Consequently, a passing result is an oracle-prompted reward upper bound, not permission to enable
+the formal Stage-II reward. Keep `task_decoupling.enabled=false` until SAM 3.1 and the corresponding
+Teacher-target decomposition are validated.
+
+```bash
+# Terminal 1: temporary segmentation service on one GPU.
+CUDA_VISIBLE_DEVICES=0 .venv-samhq/bin/python services/sam_hq/server.py \
+  --queue-dir data/.cache/task_decoupling_rpc_samhq \
+  --checkpoint checkpoints/sam_hq/sam_hq_vit_h.pth
+
+# Terminal 2: four independent Fast-WAM audit ranks.
+CUDA_VISIBLE_DEVICES=1,2,3,4 \
+AILOG/envs/resilient-fastwam-uv/bin/accelerate launch \
+  --config_file scripts/accelerate_configs/accelerate_inference_multi_gpu.yaml \
+  --num_processes 4 scripts/resilient/audit_task_reward.py
+```
+
+The ignored output defaults to
+`evaluate_results/task_decoupling/gate4_libero10_task7_joint1_half_samhq_oracle_box/`. The fixed
+split, seeds, layer 19, timestep 500, group size 4, metrics, and pass thresholds are recorded in
+`configs/task_reward_audit/samhq_libero10_task7_joint1_half.yaml`.
+
 ## Extension switches and baseline protection
 
 The following policy is mandatory:
