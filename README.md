@@ -1078,17 +1078,12 @@ Consequently, a passing result is an oracle-prompted reward upper bound, not per
 the formal Stage-II reward. Keep `task_decoupling.enabled=false` until SAM 3.1 and the corresponding
 Teacher-target decomposition are validated.
 
-```bash
-# Terminal 1: temporary segmentation service on one GPU.
-CUDA_VISIBLE_DEVICES=0 .venv-samhq/bin/python services/sam_hq/server.py \
-  --queue-dir data/.cache/task_decoupling_rpc_samhq \
-  --checkpoint checkpoints/sam_hq/sam_hq_vit_h.pth
+Use the lifecycle-managed launcher, passing the segmentation GPU followed by exactly four audit
+GPUs. It always terminates the HQ-SAM service and all audit workers when the audit finishes,
+fails, or is interrupted, so it does not leave GPU-resident services behind:
 
-# Terminal 2: four independent Fast-WAM audit ranks.
-CUDA_VISIBLE_DEVICES=1,2,3,4 \
-AILOG/envs/resilient-fastwam-uv/bin/accelerate launch \
-  --config_file scripts/accelerate_configs/accelerate_inference_multi_gpu.yaml \
-  --num_processes 4 scripts/resilient/audit_task_reward.py
+```bash
+bash scripts/resilient/run_task_reward_audit.sh 0 1,2,3,4
 ```
 
 The ignored output defaults to

@@ -59,9 +59,7 @@ class CounterfactualTests(unittest.TestCase):
 
     def test_entity_table_is_bound_to_the_rollout_task(self) -> None:
         table = Path("configs/task_entities/libero_10_task7.yaml")
-        entities = load_entity_specification(
-            table, expected_suite="libero_10", expected_task_id=7
-        )
+        entities = load_entity_specification(table, expected_suite="libero_10", expected_task_id=7)
         self.assertEqual(
             [item.entity_id for item in entities],
             ["alphabet_soup", "cream_cheese", "basket"],
@@ -201,9 +199,7 @@ class FileServiceTests(unittest.TestCase):
                 request_path = next((queue / "requests").glob("*.json"))
                 request = json.loads(request_path.read_text(encoding="utf-8"))
                 with np.load(queue / "requests" / request["payload_file"]) as payload:
-                    np.testing.assert_array_equal(
-                        payload["prompt_boxes_xyxy"], prompts.boxes_xyxy
-                    )
+                    np.testing.assert_array_equal(payload["prompt_boxes_xyxy"], prompts.boxes_xyxy)
                 token = request_path.stem
                 masks = np.ones((1, 1, 2, 8, 8), dtype=bool)
                 np.savez_compressed(
@@ -232,6 +228,16 @@ class FileServiceTests(unittest.TestCase):
 
 
 class AuditMetricTests(unittest.TestCase):
+    def test_gate4_launcher_owns_service_lifecycle(self) -> None:
+        source = Path("scripts/resilient/run_task_reward_audit.sh").read_text(encoding="utf-8")
+        self.assertIn("trap cleanup EXIT", source)
+        self.assertIn('stop_process_group "${SAM_PID}"', source)
+        self.assertIn('stop_process_group "${AUDIT_PID}"', source)
+        self.assertIn(
+            "accelerator.end_training",
+            Path("scripts/resilient/audit_task_reward.py").read_text(encoding="utf-8"),
+        )
+
     def test_segmentation_and_probe_metrics(self) -> None:
         truth = np.zeros((1, 2, 4, 4), dtype=bool)
         truth[..., 1:3, 1:3] = True
@@ -285,9 +291,7 @@ class AuditMetricTests(unittest.TestCase):
         )
         self.assertEqual(summary["requested_group_count"], 2)
         self.assertEqual(summary["valid_group_count"], 1)
-        self.assertEqual(
-            summary["rewards"]["reward_task_direction"]["pairwise_accuracy"], 1.0
-        )
+        self.assertEqual(summary["rewards"]["reward_task_direction"]["pairwise_accuracy"], 1.0)
         decision = evaluate_gate4(
             {
                 "valid_group_fraction": 1.0,

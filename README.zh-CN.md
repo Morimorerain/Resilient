@@ -994,17 +994,11 @@ joint-1运动量作为干扰变量单独审计。状态30--34为开发集，35--
 Stage-II reward。在SAM3.1及Teacher target分解均验证前，必须保持
 `task_decoupling.enabled=false`。
 
-```bash
-# 终端1：一张GPU运行临时分割服务。
-CUDA_VISIBLE_DEVICES=0 .venv-samhq/bin/python services/sam_hq/server.py \
-  --queue-dir data/.cache/task_decoupling_rpc_samhq \
-  --checkpoint checkpoints/sam_hq/sam_hq_vit_h.pth
+请使用统一管理生命周期的启动器，第一个参数是分割GPU，第二个参数是严格4张审计GPU。无论
+审计正常结束、报错还是被中断，它都会自动停止HQ-SAM服务和全部审计worker，避免残留显存：
 
-# 终端2：四个相互独立的Fast-WAM审计rank。
-CUDA_VISIBLE_DEVICES=1,2,3,4 \
-AILOG/envs/resilient-fastwam-uv/bin/accelerate launch \
-  --config_file scripts/accelerate_configs/accelerate_inference_multi_gpu.yaml \
-  --num_processes 4 scripts/resilient/audit_task_reward.py
+```bash
+bash scripts/resilient/run_task_reward_audit.sh 0 1,2,3,4
 ```
 
 默认输出到Git忽略的

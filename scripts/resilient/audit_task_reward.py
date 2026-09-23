@@ -440,6 +440,7 @@ def _run(cfg: DictConfig) -> None:
         )
         _write_summary(cfg, output_dir, all_rows)
         print(f"Gate-4 audit complete: {output_dir / 'summary.json'}", flush=True)
+    accelerator.end_training()
 
 
 @hydra.main(
