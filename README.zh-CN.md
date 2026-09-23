@@ -886,12 +886,12 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 \
   accelerate launch \
   --config_file scripts/accelerate_configs/accelerate_opsd_zero2_ds.yaml \
   --num_processes 4 scripts/resilient/train_two_stage_stage2.py \
-  --config-name two_stage_opsd/fastwam_libero10_task7_joint1_half \
-  output_dir=runs/two_stage_opsd/libero10_task7_joint1_half_seed42/stage2_from_stage1_10ep \
-  two_stage_opsd.distributed.num_processes=4 \
-  two_stage_opsd.stage2.initial_adapter=runs/two_stage_opsd/libero10_task7_joint1_half_seed42/stage1/final/joint_adapter.pt \
-  outcome_fpo.num_epochs=10 resume=null
+  --config-name two_stage_opsd/fastwam_libero10_task7_joint1_half_stage2_10ep \
+  two_stage_opsd.distributed.num_processes=4
 ```
+
+这个独立配置将 Stage-II optimizer 固定为学习率 `1e-6`、weight decay `0`、梯度范数
+`0.1`和 gradient accumulation `1`；不能误用 Stage-I 的 `1e-4` 学习率。
 
 若要扩展已经完成的 Stage II，并严格恢复 AdamW、RNG、group 位置和 LoRA 状态，应提高总 epoch
 上限并在同一输出目录使用 `resume=auto`。与保存配置相比，只允许更改

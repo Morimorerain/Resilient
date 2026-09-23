@@ -959,12 +959,13 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 \
   accelerate launch \
   --config_file scripts/accelerate_configs/accelerate_opsd_zero2_ds.yaml \
   --num_processes 4 scripts/resilient/train_two_stage_stage2.py \
-  --config-name two_stage_opsd/fastwam_libero10_task7_joint1_half \
-  output_dir=runs/two_stage_opsd/libero10_task7_joint1_half_seed42/stage2_from_stage1_10ep \
-  two_stage_opsd.distributed.num_processes=4 \
-  two_stage_opsd.stage2.initial_adapter=runs/two_stage_opsd/libero10_task7_joint1_half_seed42/stage1/final/joint_adapter.pt \
-  outcome_fpo.num_epochs=10 resume=null
+  --config-name two_stage_opsd/fastwam_libero10_task7_joint1_half_stage2_10ep \
+  two_stage_opsd.distributed.num_processes=4
 ```
+
+The dedicated config fixes the Stage-II optimizer settings at learning rate `1e-6`, zero weight
+decay, gradient norm `0.1`, and gradient accumulation `1`; it must not inherit the Stage-I learning
+rate `1e-4`.
 
 To extend a completed Stage II without resetting AdamW, RNG, group position, or LoRA state, increase
 the total horizon and resume the same output directory. Only `outcome_fpo.num_epochs` and checkpoint
