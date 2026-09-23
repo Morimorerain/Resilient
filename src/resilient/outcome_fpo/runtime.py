@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -60,6 +61,17 @@ from .trainer import OutcomeFPOTrainer
 from .types import ActionConditioning, CandidateSample, OutcomeGroup
 
 
+@dataclass(frozen=True)
+class CheckpointRetentionPolicy:
+    """Independent retention for adapters and strict-resume state shards."""
+
+    rolling_keep_last: int
+    epoch_keep_last: int | None
+    preserve_epochs: tuple[int, ...]
+    epoch_full_state_keep_last: int | None
+    preserve_full_state_epochs: tuple[int, ...]
+
+
 def resolved_config_hash(cfg: DictConfig) -> str:
     """Hash all algorithmic settings while excluding runtime locations."""
     payload = OmegaConf.to_container(cfg, resolve=True)
@@ -100,9 +112,7 @@ def _assert_resume_config_compatible(
     output_dir: Path,
 ) -> tuple[str, Path | None]:
     """Verify an exact resume, allowing only a longer epoch horizon and retention."""
-    state = json.loads(
-        (checkpoint_dir / "trainer_state.json").read_text(encoding="utf-8")
-    )
+    state = json.loads((checkpoint_dir / "trainer_state.json").read_text(encoding="utf-8"))
     stored_hash = str(state["config_sha256"])
     current_hash = resolved_config_hash(current_cfg)
     candidates = [
@@ -121,9 +131,7 @@ def _assert_resume_config_compatible(
     if resolved_config_hash(previous_cfg) != stored_hash:
         raise ValueError("Outcome-FPO checkpoint configuration hash mismatch.")
     if resume_compatibility_hash(previous_cfg) != resume_compatibility_hash(current_cfg):
-        raise ValueError(
-            "Outcome-FPO resume changed an algorithmic setting other than num_epochs."
-        )
+        raise ValueError("Outcome-FPO resume changed an algorithmic setting other than num_epochs.")
     completed_epochs = int(state["epoch"])
     requested_epochs = int(current_cfg.outcome_fpo.num_epochs)
     if requested_epochs <= completed_epochs:
@@ -138,31 +146,55 @@ def _resolve_project_path(value: str) -> Path:
     return path.resolve() if path.is_absolute() else (Path.cwd() / path).resolve()
 
 
-def _checkpoint_retention(cfg: DictConfig) -> tuple[int, int | None, list[int]]:
+def _checkpoint_retention(cfg: DictConfig) -> CheckpointRetentionPolicy:
     """Resolve backward-compatible rolling and epoch checkpoint retention."""
     section = cfg.get("checkpoint_retention")
     if section is None:
-        return int(cfg.max_checkpoints), None, []
+        return CheckpointRetentionPolicy(int(cfg.max_checkpoints), None, (), None, ())
     rolling_keep = int(section.get("rolling_keep_last", cfg.max_checkpoints))
     epoch_value = section.get("epoch_keep_last")
     epoch_keep = None if epoch_value is None else int(epoch_value)
-    preserve_epochs = [int(value) for value in section.get("preserve_epochs", [])]
+    preserve_epochs = tuple(int(value) for value in section.get("preserve_epochs", []))
+    full_state_value = section.get("epoch_full_state_keep_last")
+    full_state_keep = None if full_state_value is None else int(full_state_value)
+    preserve_full_states = tuple(
+        int(value) for value in section.get("preserve_full_state_epochs", [])
+    )
     if rolling_keep <= 0:
         raise ValueError("checkpoint_retention.rolling_keep_last must be positive.")
     if epoch_keep is not None and epoch_keep <= 0:
         raise ValueError("checkpoint_retention.epoch_keep_last must be positive or null.")
+    if full_state_keep is not None and full_state_keep <= 0:
+        raise ValueError(
+            "checkpoint_retention.epoch_full_state_keep_last must be positive or null."
+        )
     if any(epoch <= 0 for epoch in preserve_epochs):
         raise ValueError("checkpoint_retention.preserve_epochs must contain positive epochs.")
     if len(set(preserve_epochs)) != len(preserve_epochs):
         raise ValueError("checkpoint_retention.preserve_epochs must be unique.")
-    return rolling_keep, epoch_keep, preserve_epochs
+    if any(epoch <= 0 for epoch in preserve_full_states):
+        raise ValueError(
+            "checkpoint_retention.preserve_full_state_epochs must contain positive epochs."
+        )
+    if len(set(preserve_full_states)) != len(preserve_full_states):
+        raise ValueError("checkpoint_retention.preserve_full_state_epochs must be unique.")
+    return CheckpointRetentionPolicy(
+        rolling_keep,
+        epoch_keep,
+        preserve_epochs,
+        full_state_keep,
+        preserve_full_states,
+    )
 
 
 def _resolve_resume(output_dir: Path, resume: str | None) -> Path | None:
     if resume in {None, "", "null"}:
         return None
     if resume != "auto":
-        return _resolve_project_path(str(resume))
+        checkpoint = _resolve_project_path(str(resume))
+        if not (checkpoint / "accelerate").is_dir():
+            raise ValueError(f"Outcome-FPO checkpoint has no strict-resume state: {checkpoint}")
+        return checkpoint
     checkpoint_root = output_dir / "checkpoints"
     candidates = [
         *(checkpoint_root / "state").glob("step_*"),
@@ -171,7 +203,7 @@ def _resolve_resume(output_dir: Path, resume: str | None) -> Path | None:
     completed: list[tuple[tuple[int, int, int], Path]] = []
     for candidate in candidates:
         state_path = candidate / "trainer_state.json"
-        if not state_path.is_file():
+        if not state_path.is_file() or not (candidate / "accelerate").is_dir():
             continue
         payload = json.loads(state_path.read_text(encoding="utf-8"))
         completed.append(
@@ -212,9 +244,7 @@ def validate_outcome_fpo_config(
         raise ValueError("Outcome video length does not match the action/video frequency ratio.")
     frame_steps = [int(value) for value in section.rollout.future_frame_steps]
     action_video_ratio = int(cfg.data.train.action_video_freq_ratio)
-    if frame_steps != list(
-        range(0, int(section.rollout.action_horizon) + 1, action_video_ratio)
-    ):
+    if frame_steps != list(range(0, int(section.rollout.action_horizon) + 1, action_video_ratio)):
         raise ValueError("Outcome frame steps must follow Fast-WAM's action/video alignment.")
     if int(section.rollout.num_inference_steps) != int(cfg.eval_num_inference_steps):
         raise ValueError("Student action sampling must keep Fast-WAM's configured step count.")
@@ -244,17 +274,12 @@ def validate_outcome_fpo_config(
     global_groups = int(section.fpo.groups_per_global_update)
     if global_groups <= 0 or global_groups % requested_gpus != 0:
         raise ValueError("groups_per_global_update must divide evenly across all ranks.")
-    task_ids = [
-        int(value)
-        for value in section.rollout.get("task_ids", list(range(10)))
-    ]
+    task_ids = [int(value) for value in section.rollout.get("task_ids", list(range(10)))]
     if not task_ids or len(set(task_ids)) != len(task_ids):
         raise ValueError("rollout.task_ids must be a non-empty unique list.")
     if any(task_id < 0 or task_id >= 10 for task_id in task_ids):
         raise ValueError("Every LIBERO task id must be in [0, 9].")
-    anchor_steps = [
-        int(value) for value in section.rollout.get("anchor_steps", [0])
-    ]
+    anchor_steps = [int(value) for value in section.rollout.get("anchor_steps", [0])]
     if not anchor_steps or anchor_steps[0] != 0 or anchor_steps != sorted(set(anchor_steps)):
         raise ValueError("rollout.anchor_steps must be sorted, unique, and start at zero.")
     if any(value < 0 for value in anchor_steps):
@@ -303,9 +328,7 @@ def validate_outcome_fpo_config(
         and int(item["task_id"]) in set(task_ids)
     ]
     expected_selected_states = (
-        len(section.rollout.suites)
-        * len(task_ids)
-        * int(section.rollout.rollouts_per_task)
+        len(section.rollout.suites) * len(task_ids) * int(section.rollout.rollouts_per_task)
     )
     if (
         len(selected_training) != expected_selected_states
@@ -313,7 +336,7 @@ def validate_outcome_fpo_config(
     ):
         raise ValueError("Selected Outcome-FPO tasks do not have complete disjoint state splits.")
     adapter = FastWAMLoraConfig.from_config(OmegaConf.to_container(cfg.adapter, resolve=True))
-    rolling_keep, epoch_keep, preserve_epochs = _checkpoint_retention(cfg)
+    retention = _checkpoint_retention(cfg)
     return {
         "config_sha256": resolved_config_hash(cfg),
         "method": "outcome_guided_flow_policy_optimization",
@@ -334,9 +357,11 @@ def validate_outcome_fpo_config(
         "validation_state_count": len(selected_validation),
         "split_overlap_checked": True,
         "checkpoint_retention": {
-            "rolling_keep_last": rolling_keep,
-            "epoch_keep_last": epoch_keep,
-            "preserve_epochs": preserve_epochs,
+            "rolling_keep_last": retention.rolling_keep_last,
+            "epoch_keep_last": retention.epoch_keep_last,
+            "preserve_epochs": list(retention.preserve_epochs),
+            "epoch_full_state_keep_last": retention.epoch_full_state_keep_last,
+            "preserve_full_state_epochs": list(retention.preserve_full_state_epochs),
         },
     }
 
@@ -389,18 +414,14 @@ def build_outcome_rollout_schedule(
                             environment_seed=_derive_seed(
                                 environment_seed, *identity, "environment"
                             ),
-                            inference_seed=_derive_seed(
-                                inference_seed, *identity, "inference"
-                            ),
+                            inference_seed=_derive_seed(inference_seed, *identity, "inference"),
                             sample_id=sample_id,
                             anchor_index=anchor_index,
                             anchor_step=int(anchor_step),
                         )
                     )
                     sample_id += 1
-    generator = torch.Generator(device="cpu").manual_seed(
-        int(schedule_seed) + int(epoch)
-    )
+    generator = torch.Generator(device="cpu").manual_seed(int(schedule_seed) + int(epoch))
     permutation = torch.randperm(len(descriptors), generator=generator).tolist()
     return [descriptors[index] for index in permutation]
 
@@ -615,9 +636,7 @@ def _collect_group(
             num_video_frames=int(section.outcome.num_video_frames),
             num_inference_steps=int(section.outcome.num_inference_steps),
             sigma_shift=(
-                None
-                if section.outcome.sigma_shift is None
-                else float(section.outcome.sigma_shift)
+                None if section.outcome.sigma_shift is None else float(section.outcome.sigma_shift)
             ),
             prediction_seed=_derive_seed(
                 int(section.rollout.inference_seed), descriptor.sample_id, "teacher-video"
@@ -690,18 +709,17 @@ def _collect_group(
                     "task_decoupling_statistics": residual.mask_statistics,
                     "task_decoupling_provenance": residual.provenance,
                 }
-            if task_disentangler is not None and str(
-                cfg.task_decoupling.get("reward", {}).get("type", "")
-            ) == "task_direction":
+            if (
+                task_disentangler is not None
+                and str(cfg.task_decoupling.get("reward", {}).get("type", "")) == "task_direction"
+            ):
                 full_hidden = teacher.encode_realized_latent(
                     residual.full_latent, conditioning, target
                 )
                 counterfactual_hidden = teacher.encode_realized_latent(
                     residual.counterfactual_latent, conditioning, target
                 )
-                decomposed = task_outcome_rewards(
-                    full_hidden, counterfactual_hidden, target
-                )
+                decomposed = task_outcome_rewards(full_hidden, counterfactual_hidden, target)
                 reward = float(decomposed.task_direction)
                 task_feature_metadata["task_decoupling_rewards"] = {
                     "full": float(decomposed.full),
@@ -723,12 +741,16 @@ def _collect_group(
                 seed=cfm_seed,
             )
             with torch.no_grad():
-                old_loss = old_scorer(
-                    conditioning,
-                    normalized_action,
-                    mc_noise,
-                    mc_timestep,
-                ).detach().cpu()
+                old_loss = (
+                    old_scorer(
+                        conditioning,
+                        normalized_action,
+                        mc_noise,
+                        mc_timestep,
+                    )
+                    .detach()
+                    .cpu()
+                )
             candidates.append(
                 CandidateSample(
                     normalized_action=normalized_action,
@@ -773,7 +795,7 @@ def run_outcome_fpo_training(cfg: DictConfig) -> None:
     """Train a Fault-specialized Recovery LoRA with exactly 4 or 8 ranks."""
     accelerator = Accelerator(mixed_precision=str(cfg.mixed_precision))
     provenance = validate_outcome_fpo_config(cfg, world_size=accelerator.num_processes)
-    rolling_keep, epoch_keep, preserve_epochs = _checkpoint_retention(cfg)
+    retention = _checkpoint_retention(cfg)
     output_dir = _resolve_project_path(str(cfg.output_dir))
     output_dir.mkdir(parents=True, exist_ok=True)
     resume_path = _resolve_resume(output_dir, None if cfg.resume is None else str(cfg.resume))
@@ -850,23 +872,17 @@ def run_outcome_fpo_training(cfg: DictConfig) -> None:
     processor.set_normalizer_from_stats(stats)
     video_height, video_width = (int(value) for value in cfg.data.train.video_size)
     suites = [str(value) for value in section.rollout.suites]
-    task_ids = [
-        int(value) for value in section.rollout.get("task_ids", list(range(10)))
-    ]
+    task_ids = [int(value) for value in section.rollout.get("task_ids", list(range(10)))]
     anchor_steps = [int(value) for value in section.rollout.get("anchor_steps", [0])]
     rollouts_per_task = int(section.rollout.rollouts_per_task)
-    global_groups_per_epoch = (
-        len(suites) * len(task_ids) * rollouts_per_task * len(anchor_steps)
-    )
+    global_groups_per_epoch = len(suites) * len(task_ids) * rollouts_per_task * len(anchor_steps)
     local_groups_per_epoch = global_groups_per_epoch // accelerator.num_processes
     local_collection_size = int(section.fpo.groups_per_global_update) // accelerator.num_processes
     completed_before_epoch = trainer.epoch * local_groups_per_epoch
     completed_in_epoch = trainer.group_index - completed_before_epoch
     if not 0 <= completed_in_epoch <= local_groups_per_epoch:
         raise ValueError("Checkpoint group index is inconsistent with the configured world size.")
-    training_manifest_path = _resolve_project_path(
-        str(section.split.training_reference_manifest)
-    )
+    training_manifest_path = _resolve_project_path(str(section.split.training_reference_manifest))
     training_records = _training_state_records(training_manifest_path)
     rollout_log = output_dir / f"rollouts_rank_{accelerator.process_index:02d}.jsonl"
     update_log = output_dir / f"updates_rank_{accelerator.process_index:02d}.jsonl"
@@ -945,26 +961,22 @@ def run_outcome_fpo_training(cfg: DictConfig) -> None:
             del groups
             save_every = int(cfg.save_every)
             before_final_collection = start + local_collection_size < len(schedule)
-            if (
-                save_every > 0
-                and trainer.global_step % save_every == 0
-                and before_final_collection
-            ):
+            if save_every > 0 and trainer.global_step % save_every == 0 and before_final_collection:
                 checkpoint_dir = trainer.save_checkpoint(
                     output_dir,
                     config_hash=provenance["config_sha256"],
                     fault_state={},
                 )
                 if accelerator.is_main_process:
-                    OmegaConf.save(
-                        cfg, checkpoint_dir / "resolved_config.yaml", resolve=True
-                    )
+                    OmegaConf.save(cfg, checkpoint_dir / "resolved_config.yaml", resolve=True)
                 accelerator.wait_for_everyone()
                 trainer.prune_checkpoints(
                     output_dir,
-                    keep=rolling_keep,
-                    keep_epochs=epoch_keep,
-                    preserve_epochs=preserve_epochs,
+                    keep=retention.rolling_keep_last,
+                    keep_epochs=retention.epoch_keep_last,
+                    preserve_epochs=retention.preserve_epochs,
+                    keep_epoch_full_states=retention.epoch_full_state_keep_last,
+                    preserve_full_state_epochs=(retention.preserve_full_state_epochs),
                 )
 
         trainer.epoch = epoch_index + 1
@@ -979,9 +991,11 @@ def run_outcome_fpo_training(cfg: DictConfig) -> None:
         accelerator.wait_for_everyone()
         trainer.prune_checkpoints(
             output_dir,
-            keep=rolling_keep,
-            keep_epochs=epoch_keep,
-            preserve_epochs=preserve_epochs,
+            keep=retention.rolling_keep_last,
+            keep_epochs=retention.epoch_keep_last,
+            preserve_epochs=retention.preserve_epochs,
+            keep_epoch_full_states=retention.epoch_full_state_keep_last,
+            preserve_full_state_epochs=retention.preserve_full_state_epochs,
         )
         logging.info(
             "Completed outcome-FPO epoch %d/%d at optimizer step %d.",

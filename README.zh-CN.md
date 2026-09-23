@@ -774,13 +774,14 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
 ```
 
 默认每次全局采集 8 个 group：4 卡时每 rank 2 个，8 卡时每 rank 1 个。中间 checkpoint 只在
-完整采集边界写入 `<output_dir>/checkpoints/state/step_XXXXXXXX/`，默认滚动保留最近 3 次。每个
-完整 epoch 另存到 `<output_dir>/checkpoints/epochs/epoch_XXXX_step_XXXXXXXX/`，且不受中间状态
-滚动清理影响。两类 checkpoint 均包含 Accelerate/ZeRO optimizer 与 RNG 状态、
-`recovery_adapter.pt`、`trainer_state.json`；解析后的配置与 provenance 位于 run 根目录。
-`resume=auto` 会在两类目录中选择进度最靠后的完整 checkpoint，也可显式指定任意一种目录；解析
-配置哈希不一致会立即拒绝恢复。`rollouts_rank_XX.jsonl` 记录状态、seed、4 个 reward 以及仅供
-诊断的成功标志，成功标志不会参与 reward。
+完整采集边界写入 `<output_dir>/checkpoints/state/step_XXXXXXXX/`；每个完整 epoch 另存到
+`<output_dir>/checkpoints/epochs/epoch_XXXX_step_XXXXXXXX/`。完整 checkpoint 包含
+Accelerate/ZeRO optimizer 与 RNG 状态、`recovery_adapter.pt`、`trainer_state.json`；解析后的配置
+与 provenance 位于 run 根目录。保留策略可以删除旧 epoch 的大型 `accelerate/` 目录，同时保留
+adapter 与审计元数据；这种 adapter-only epoch 仍可评测，但不能严格恢复 optimizer/RNG。
+`resume=auto` 会忽略 adapter-only epoch，在两类目录中选择进度最靠后的完整 checkpoint；显式
+指定 adapter-only 路径或配置哈希不一致都会立即拒绝恢复。`rollouts_rank_XX.jsonl` 记录状态、
+seed、4 个 reward 以及仅供诊断的成功标志，成功标志不会参与 reward。
 
 训练完成后，使用现有通用 Fast-WAM LoRA loader 和未见状态库评测 Recovery LoRA。参数仍保留
 历史 `opsd` 名称，但能加载结构完全相同的本 adapter：
@@ -858,9 +859,39 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 \
 `<run>/stage1/final/joint_adapter.pt`。Stage II 使用标准 Outcome-FPO 断点布局
 `<run>/stage2/checkpoints/`，最终 epoch adapter 即两阶段策略。
 `checkpoint_retention.rolling_keep_last` 控制 epoch 内滚动恢复点数量，
-`checkpoint_retention.epoch_keep_last` 控制最新完整 epoch 断点数量（设为 `null` 表示全部保留），
-`checkpoint_retention.preserve_epochs` 列出额外永久保留的里程碑 epoch。task 7 配置依次使用
-`3`、`1` 和 `[1]`，因此续训到 epoch 7 后只保留完整的 epoch 1 与 epoch 7 断点。
+`checkpoint_retention.epoch_keep_last` 控制保留多少个 epoch adapter 目录（`null` 表示全部保留），
+`preserve_epochs` 列出额外 adapter 里程碑。独立的 `epoch_full_state_keep_last` 控制其中多少个
+epoch 保留大型 Accelerate/ZeRO 严格恢复状态（`null` 表示全部保留），
+`preserve_full_state_epochs` 列出额外完整状态里程碑。task 7 当前配置保留每个 epoch adapter，
+但仅保留最新一次完整恢复状态：
+
+```yaml
+checkpoint_retention:
+  rolling_keep_last: 1
+  epoch_keep_last: null
+  preserve_epochs: []
+  epoch_full_state_keep_last: 1
+  preserve_full_state_epochs: []
+```
+
+只有在新 epoch 完整保存后才会清理旧恢复分片。旧 epoch 目录继续保留
+`recovery_adapter.pt`、`trainer_state.json`、`resolved_config.yaml` 以及
+`resume_state_pruned.json` 标记，可用于评测但不能严格续训。
+
+如果要从已完成的 Stage-I adapter 全新训练十个 Stage-II epoch，同时保留每个
+epoch adapter 且只保留最新一份严格恢复状态，使用：
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3 \
+  accelerate launch \
+  --config_file scripts/accelerate_configs/accelerate_opsd_zero2_ds.yaml \
+  --num_processes 4 scripts/resilient/train_two_stage_stage2.py \
+  --config-name two_stage_opsd/fastwam_libero10_task7_joint1_half \
+  output_dir=runs/two_stage_opsd/libero10_task7_joint1_half_seed42/stage2_from_stage1_10ep \
+  two_stage_opsd.distributed.num_processes=4 \
+  two_stage_opsd.stage2.initial_adapter=runs/two_stage_opsd/libero10_task7_joint1_half_seed42/stage1/final/joint_adapter.pt \
+  outcome_fpo.num_epochs=10 resume=null
+```
 
 若要扩展已经完成的 Stage II，并严格恢复 AdamW、RNG、group 位置和 LoRA 状态，应提高总 epoch
 上限并在同一输出目录使用 `resume=auto`。与保存配置相比，只允许更改

@@ -837,13 +837,14 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
 
 The default global collection contains eight groups: two groups per rank on four GPUs or one group
 per rank on eight GPUs. Intermediate checkpoints are written only after a complete collection under
-`<output_dir>/checkpoints/state/step_XXXXXXXX/`; this rolling set retains the newest three states by
-default. Every completed epoch is saved separately under
-`<output_dir>/checkpoints/epochs/epoch_XXXX_step_XXXXXXXX/` and is never removed by rolling
-retention. Both checkpoint types contain Accelerate/ZeRO optimizer and RNG state,
-`recovery_adapter.pt`, and `trainer_state.json`; resolved configuration/provenance remains in the run
-root. `resume=auto` selects the most advanced complete checkpoint across both locations. An explicit
-path may point to either type, and a resolved-config hash mismatch fails closed.
+`<output_dir>/checkpoints/state/step_XXXXXXXX/`. Every completed epoch is saved separately under
+`<output_dir>/checkpoints/epochs/epoch_XXXX_step_XXXXXXXX/`. A full checkpoint contains
+Accelerate/ZeRO optimizer and RNG state, `recovery_adapter.pt`, and `trainer_state.json`; resolved
+configuration/provenance remains in the run root. Retention can keep an epoch adapter and audit
+metadata while pruning its large `accelerate/` directory. Such an adapter-only epoch remains valid
+for evaluation but cannot resume optimizer/RNG state. `resume=auto` ignores adapter-only epochs and
+selects the most advanced complete state across both locations. An explicit adapter-only path and a
+resolved-config hash mismatch both fail closed.
 `rollouts_rank_XX.jsonl` records state, seed, four rewards, and diagnostic success flags; the success
 flags are not part of the reward.
 
@@ -931,10 +932,39 @@ newest three; each contains `joint_adapter.pt`, per-rank optimizer/RNG state, sc
 strict configuration hash. Its final adapter is copied to `<run>/stage1/final/joint_adapter.pt`.
 Stage II writes standard Outcome-FPO checkpoints under `<run>/stage2/checkpoints/`; its final epoch
 adapter is the completed two-stage policy. `checkpoint_retention.rolling_keep_last` controls
-within-epoch recovery states, `checkpoint_retention.epoch_keep_last` controls the newest complete
-epoch checkpoints (`null` keeps all), and `checkpoint_retention.preserve_epochs` lists milestone
-epochs retained in addition to that rolling set. The task-7 configuration uses `3`, `1`, and `[1]`,
-respectively, so an extension through epoch 7 retains complete epoch 1 and epoch 7 checkpoints.
+within-epoch recovery states. `checkpoint_retention.epoch_keep_last` controls how many epoch adapter
+directories remain (`null` keeps all), while `preserve_epochs` lists additional adapter milestones.
+Independently, `epoch_full_state_keep_last` controls how many retained epochs keep their large
+Accelerate/ZeRO strict-resume state (`null` keeps all), and `preserve_full_state_epochs` lists full
+state milestones. The task-7 configuration keeps every epoch adapter but only the newest full state:
+
+```yaml
+checkpoint_retention:
+  rolling_keep_last: 1
+  epoch_keep_last: null
+  preserve_epochs: []
+  epoch_full_state_keep_last: 1
+  preserve_full_state_epochs: []
+```
+
+Pruning happens only after the new epoch checkpoint is completely saved. Older epoch directories
+retain `recovery_adapter.pt`, `trainer_state.json`, and `resolved_config.yaml`, plus a
+`resume_state_pruned.json` marker; they are usable for evaluation but not strict continuation.
+
+To start a fresh ten-epoch Stage II from the completed Stage-I adapter while retaining every epoch
+adapter and only the latest strict-resume state:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3 \
+  accelerate launch \
+  --config_file scripts/accelerate_configs/accelerate_opsd_zero2_ds.yaml \
+  --num_processes 4 scripts/resilient/train_two_stage_stage2.py \
+  --config-name two_stage_opsd/fastwam_libero10_task7_joint1_half \
+  output_dir=runs/two_stage_opsd/libero10_task7_joint1_half_seed42/stage2_from_stage1_10ep \
+  two_stage_opsd.distributed.num_processes=4 \
+  two_stage_opsd.stage2.initial_adapter=runs/two_stage_opsd/libero10_task7_joint1_half_seed42/stage1/final/joint_adapter.pt \
+  outcome_fpo.num_epochs=10 resume=null
+```
 
 To extend a completed Stage II without resetting AdamW, RNG, group position, or LoRA state, increase
 the total horizon and resume the same output directory. Only `outcome_fpo.num_epochs` and checkpoint

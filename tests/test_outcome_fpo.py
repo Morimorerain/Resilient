@@ -74,9 +74,7 @@ class FPOObjectiveTests(unittest.TestCase):
 
 class OutcomeRewardTests(unittest.TestCase):
     def test_temporal_delta_reward_ignores_shared_static_content(self) -> None:
-        target_hidden = torch.tensor(
-            [[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]]
-        )
+        target_hidden = torch.tensor([[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]])
         shifted = target_hidden + 10.0
         target = OutcomeTarget(
             hidden=target_hidden,
@@ -111,9 +109,7 @@ class OutcomeRewardTests(unittest.TestCase):
         self.assertEqual(metrics["pair_count"], 6)
         self.assertAlmostEqual(float(metrics["pairwise_accuracy"]), 1.0)
         motion = np.asarray([2.0, 0.5, 0.2, 2.0, 1.5, 0.0])
-        correlation = within_group_motion_partial_correlation(
-            reward, progress, motion, group
-        )
+        correlation = within_group_motion_partial_correlation(reward, progress, motion, group)
         self.assertTrue(np.isfinite(correlation))
 
     def test_cfm_pair_sampling_is_reproducible_and_independent(self) -> None:
@@ -211,6 +207,53 @@ class CheckpointTests(unittest.TestCase):
                 ["epoch_0001_step_00000050", "epoch_0004_step_00000200"],
             )
 
+    def test_retention_keeps_all_adapters_and_only_latest_full_state(self) -> None:
+        class _Accelerator:
+            is_main_process = True
+
+            @staticmethod
+            def wait_for_everyone() -> None:
+                return None
+
+        trainer = OutcomeFPOTrainer.__new__(OutcomeFPOTrainer)
+        trainer.accelerator = _Accelerator()
+        with tempfile.TemporaryDirectory() as directory:
+            output_dir = Path(directory)
+            epoch_root = output_dir / "checkpoints" / "epochs"
+            for epoch_index in range(1, 5):
+                checkpoint = epoch_root / f"epoch_{epoch_index:04d}_step_{epoch_index * 50:08d}"
+                (checkpoint / "accelerate").mkdir(parents=True)
+                (checkpoint / "accelerate/model.pt").write_bytes(b"state")
+                (checkpoint / "recovery_adapter.pt").write_bytes(b"adapter")
+                (checkpoint / "trainer_state.json").write_text(
+                    json.dumps({"epoch": epoch_index}), encoding="utf-8"
+                )
+
+            trainer.prune_checkpoints(
+                output_dir,
+                keep=1,
+                keep_epochs=None,
+                keep_epoch_full_states=1,
+            )
+
+            checkpoints = sorted(epoch_root.iterdir())
+            self.assertEqual(len(checkpoints), 4)
+            self.assertTrue(all((path / "recovery_adapter.pt").is_file() for path in checkpoints))
+            self.assertEqual(
+                [path.name for path in checkpoints if (path / "accelerate").is_dir()],
+                ["epoch_0004_step_00000200"],
+            )
+            for path in checkpoints[:-1]:
+                marker = json.loads((path / "resume_state_pruned.json").read_text(encoding="utf-8"))
+                self.assertFalse(marker["strict_resume_available"])
+
+    def test_explicit_resume_rejects_adapter_only_epoch(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            checkpoint = Path(directory) / "epoch_0001_step_00000050"
+            checkpoint.mkdir()
+            with self.assertRaisesRegex(ValueError, "no strict-resume state"):
+                _resolve_resume(Path(directory), str(checkpoint))
+
     def test_extended_horizon_is_resume_compatible(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             output_dir = Path(directory)
@@ -228,9 +271,7 @@ class CheckpointTests(unittest.TestCase):
             OmegaConf.save(previous, output_dir / "resolved_config.yaml", resolve=True)
             stored_hash = resolved_config_hash(previous)
             (checkpoint / "trainer_state.json").write_text(
-                json.dumps(
-                    {"config_sha256": stored_hash, "epoch": 1, "global_step": 50}
-                ),
+                json.dumps({"config_sha256": stored_hash, "epoch": 1, "global_step": 50}),
                 encoding="utf-8",
             )
             current = OmegaConf.create(
@@ -274,6 +315,7 @@ class CheckpointTests(unittest.TestCase):
                 (epoch, 2000, 1, 500),
             ):
                 path.mkdir(parents=True)
+                (path / "accelerate").mkdir()
                 (path / "trainer_state.json").write_text(
                     json.dumps(
                         {
@@ -286,6 +328,9 @@ class CheckpointTests(unittest.TestCase):
                 )
 
             self.assertEqual(_resolve_resume(output_dir, "auto"), epoch)
+
+            (epoch / "accelerate").rmdir()
+            self.assertEqual(_resolve_resume(output_dir, "auto"), rolling)
 
 
 class _ToyVideoExpert(nn.Module):

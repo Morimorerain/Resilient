@@ -87,9 +87,7 @@ class OutcomeFPOTrainer:
         for _ in range(self.update_epochs):
             self.optimizer.zero_grad(set_to_none=True)
             for group, group_advantage in zip(groups, advantages, strict=True):
-                for candidate, advantage in zip(
-                    group.candidates, group_advantage, strict=True
-                ):
+                for candidate, advantage in zip(group.candidates, group_advantage, strict=True):
                     with self.accelerator.autocast():
                         current_cfm_loss = self.scoring_model(
                             group.conditioning,
@@ -169,6 +167,7 @@ class OutcomeFPOTrainer:
             checkpoint_boundary = "completed_epoch"
         if self.accelerator.is_main_process:
             state_dir.mkdir(parents=True, exist_ok=True)
+            (state_dir / "resume_state_pruned.json").unlink(missing_ok=True)
         self.accelerator.wait_for_everyone()
         self.accelerator.save_state(str(state_dir / "accelerate"))
         if self.accelerator.is_main_process:
@@ -210,15 +209,22 @@ class OutcomeFPOTrainer:
         keep: int,
         keep_epochs: int | None = None,
         preserve_epochs: Sequence[int] = (),
+        keep_epoch_full_states: int | None = None,
+        preserve_full_state_epochs: Sequence[int] = (),
     ) -> None:
-        """Prune rolling states and optionally retain selected epoch checkpoints."""
+        """Prune rolling states, epoch adapters, and large epoch recovery states."""
         if keep <= 0:
             raise ValueError("Checkpoint retention must be positive.")
         if keep_epochs is not None and int(keep_epochs) <= 0:
             raise ValueError("Epoch checkpoint retention must be positive when enabled.")
+        if keep_epoch_full_states is not None and int(keep_epoch_full_states) <= 0:
+            raise ValueError("Epoch full-state retention must be positive when enabled.")
         preserved = {int(epoch) for epoch in preserve_epochs}
+        preserved_full_states = {int(epoch) for epoch in preserve_full_state_epochs}
         if any(epoch <= 0 for epoch in preserved):
             raise ValueError("Preserved epoch checkpoint numbers must be positive.")
+        if any(epoch <= 0 for epoch in preserved_full_states):
+            raise ValueError("Preserved full-state epoch numbers must be positive.")
         self.accelerator.wait_for_everyone()
         if self.accelerator.is_main_process:
             root = output_dir / "checkpoints" / "state"
@@ -228,13 +234,37 @@ class OutcomeFPOTrainer:
             if keep_epochs is not None:
                 epoch_root = output_dir / "checkpoints" / "epochs"
                 epoch_checkpoints = (
-                    sorted(epoch_root.glob("epoch_*_step_*"))
-                    if epoch_root.exists()
-                    else []
+                    sorted(epoch_root.glob("epoch_*_step_*")) if epoch_root.exists() else []
                 )
                 newest = set(epoch_checkpoints[-int(keep_epochs) :])
                 for path in epoch_checkpoints:
                     epoch_number = int(path.name.split("_", maxsplit=2)[1])
-                    if path not in newest and epoch_number not in preserved:
+                    if (
+                        path not in newest
+                        and epoch_number not in preserved
+                        and epoch_number not in preserved_full_states
+                    ):
                         shutil.rmtree(path)
+            if keep_epoch_full_states is not None:
+                epoch_root = output_dir / "checkpoints" / "epochs"
+                epoch_checkpoints = (
+                    sorted(epoch_root.glob("epoch_*_step_*")) if epoch_root.exists() else []
+                )
+                newest_full_states = set(epoch_checkpoints[-int(keep_epoch_full_states) :])
+                for path in epoch_checkpoints:
+                    epoch_number = int(path.name.split("_", maxsplit=2)[1])
+                    if path in newest_full_states or epoch_number in preserved_full_states:
+                        continue
+                    accelerate_state = path / "accelerate"
+                    if accelerate_state.exists():
+                        shutil.rmtree(accelerate_state)
+                        marker = {
+                            "schema_version": 1,
+                            "reason": "checkpoint_retention",
+                            "adapter_checkpoint_retained": (path / "recovery_adapter.pt").is_file(),
+                            "strict_resume_available": False,
+                        }
+                        (path / "resume_state_pruned.json").write_text(
+                            json.dumps(marker, indent=2) + "\n", encoding="utf-8"
+                        )
         self.accelerator.wait_for_everyone()
