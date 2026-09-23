@@ -7,8 +7,9 @@ from omegaconf import DictConfig
 
 def validate_task_decoupling_config(section: DictConfig) -> None:
     """Reject declared options that the Gate-3 implementation does not support."""
-    if str(section.mode) != "audit":
-        raise ValueError("Task decoupling currently supports mode=audit only.")
+    mode = str(section.mode)
+    if mode not in {"audit", "training_gate4_override"}:
+        raise ValueError("Unsupported task-decoupling mode.")
     provider_type = str(section.mask_provider.type)
     if provider_type not in {"sam3_file_service", "samhq_file_service"}:
         raise ValueError("Unsupported task-decoupling mask provider.")
@@ -25,6 +26,14 @@ def validate_task_decoupling_config(section: DictConfig) -> None:
         section.mask_provider.audit_only
     ):
         raise ValueError("The oracle-box HQ-SAM backend must remain audit-only.")
+    if mode == "training_gate4_override":
+        reward = section.get("reward")
+        if reward is None or str(reward.get("type")) != "task_direction":
+            raise ValueError("The Gate-4 override requires reward.type=task_direction.")
+        if not bool(reward.get("gate4_override", False)):
+            raise ValueError("Gate-4 override training requires explicit acknowledgement.")
+        if str(reward.get("invalid_mask_policy")) != "error":
+            raise ValueError("Gate-4 override training must stop on an invalid task mask.")
     threshold = float(section.segmentation.output_probability_threshold)
     if not 0.0 < threshold < 1.0:
         raise ValueError("SAM output probability threshold must be in (0,1).")

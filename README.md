@@ -1091,6 +1091,20 @@ The ignored output defaults to
 split, seeds, layer 19, timestep 500, group size 4, metrics, and pass thresholds are recorded in
 `configs/task_reward_audit/samhq_libero10_task7_joint1_half.yaml`.
 
+Gate 4 did not meet its predeclared 0.60 ranking threshold (held-out task-direction pairwise
+accuracy 0.5526). The following command is therefore an explicit experimental override, not the
+validated default. It trains one Stage-II epoch from the Stage-I adapter with the privileged
+oracle-box HQ-SAM task-direction reward on four GPUs. HQ-SAM shares the first training GPU, and the
+lifecycle wrapper always releases both service and workers:
+
+```bash
+bash scripts/resilient/run_task_direction_outcome_fpo.sh 0,1,2,3 0
+```
+
+The fixed output is
+`runs/two_stage_opsd/libero10_task7_joint1_half_seed42/stage2_task_direction_gate4_override_epoch1/`.
+The base full-frame reward remains the default in every existing configuration.
+
 ## Extension switches and baseline protection
 
 The following policy is mandatory:

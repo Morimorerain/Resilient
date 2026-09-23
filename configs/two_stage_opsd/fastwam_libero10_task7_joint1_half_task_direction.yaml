@@ -1,0 +1,30 @@
+# @package _global_
+
+defaults:
+  - /two_stage_opsd/fastwam_libero10_task7_joint1_half
+  - override /task_decoupling: samhq_oracle_box_local_blur
+  - _self_
+
+output_dir: runs/two_stage_opsd/libero10_task7_joint1_half_seed42/stage2_task_direction_gate4_override_epoch1
+resume: null
+learning_rate: 1.0e-6
+weight_decay: 0.0
+max_grad_norm: 0.1
+gradient_accumulation_steps: 1
+
+two_stage_opsd:
+  stage2:
+    initial_adapter: runs/two_stage_opsd/libero10_task7_joint1_half_seed42/stage1/final/joint_adapter.pt
+
+outcome_fpo:
+  num_epochs: 1
+
+task_decoupling:
+  enabled: true
+  mode: training_gate4_override
+  reward:
+    type: task_direction
+    gate4_override: true
+    gate4_passed: false
+    gate4_summary: evaluate_results/task_decoupling/gate4_libero10_task7_joint1_half_samhq_oracle_box/summary.json
+    invalid_mask_policy: error

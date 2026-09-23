@@ -13,7 +13,9 @@ from resilient.task_decoupling import (
     load_entity_specification,
     validate_task_decoupling_config,
 )
+from resilient.task_decoupling.libero_oracle import stack_preprocessed_oracle_masks
 from resilient.task_decoupling.preprocessing import stack_camera_videos
+from resilient.task_decoupling.prompts import boxes_from_binary_masks
 from resilient.task_decoupling.providers import FileServiceMaskProvider
 
 
@@ -25,7 +27,9 @@ def build_task_disentangler(
     if section is None or not bool(section.get("enabled", False)):
         return None
     validate_task_decoupling_config(section)
-    if str(section.mask_provider.type) != "sam3_file_service":
+    provider_type = str(section.mask_provider.type)
+    override = bool(section.get("reward", {}).get("gate4_override", False))
+    if provider_type != "sam3_file_service" and not override:
         raise ValueError(
             "Stage-II task features require the deployable SAM 3.1 text-video provider; "
             "the oracle-box HQ-SAM backend is audit-only."
@@ -69,8 +73,23 @@ def extract_task_features(
     observations: tuple[Any, ...],
     processor,
     model,
+    env=None,
 ) -> tuple[Any, dict[str, np.ndarray]]:
     """Extract one candidate residual and return its aligned camera videos."""
     videos = stack_camera_videos(observations, processor)
-    residual = disentangler.extract(videos, model)
+    prompt_hints = None
+    if disentangler.mask_provider.prompt_mode == "box_per_frame":
+        if env is None:
+            raise ValueError("Oracle-box task features require the rollout environment.")
+        masks, _ = stack_preprocessed_oracle_masks(
+            env, observations, disentangler.entities
+        )
+        prompt_hints = boxes_from_binary_masks(
+            masks,
+            camera_names=disentangler.camera_order,
+            entity_ids=tuple(entity.entity_id for entity in disentangler.entities),
+            source="libero_instance_oracle_per_frame_xyxy",
+            padding_px=2,
+        )
+    residual = disentangler.extract(videos, model, prompt_hints=prompt_hints)
     return residual, videos

@@ -43,6 +43,10 @@ from resilient.state_banks import (
     load_manifest,
     state_fingerprint,
 )
+from resilient.task_decoupling.libero_oracle import (
+    install_robosuite_numpy2_segmentation_compatibility,
+)
+from resilient.task_decoupling.reward import task_outcome_rewards
 
 from .collector import (
     collect_action_chunk_future,
@@ -548,12 +552,21 @@ def _collect_group(
 
     episode_index = schedule_epoch * global_groups_per_epoch + descriptor.sample_id
     fault_cfg = OmegaConf.to_container(cfg.fault, resolve=True)
+    task_section = cfg.get("task_decoupling")
+    oracle_box_reward = bool(
+        task_section is not None
+        and task_section.get("enabled", False)
+        and str(task_section.mask_provider.type) == "samhq_file_service"
+    )
+    if oracle_box_reward:
+        install_robosuite_numpy2_segmentation_compatibility()
     main_env, task_description = get_libero_env(
         task,
         LIBERO_ENV_RESOLUTION,
         descriptor.environment_seed,
         fault_pipeline=build_fault_pipeline(fault_cfg),
         fault_episode_index=episode_index,
+        segmentation=oracle_box_reward,
     )
     shadow_env, _ = get_libero_env(
         task,
@@ -561,6 +574,7 @@ def _collect_group(
         descriptor.environment_seed,
         fault_pipeline=build_fault_pipeline(fault_cfg),
         fault_episode_index=episode_index,
+        segmentation=oracle_box_reward,
     )
     try:
         main_env.reset()
@@ -667,15 +681,38 @@ def _collect_group(
                     observations=future.observations,
                     processor=processor,
                     model=model,
+                    env=shadow_env,
                 )
+                if not residual.valid:
+                    raise RuntimeError("Task-direction reward received an invalid task mask.")
                 task_feature_metadata = {
                     "task_decoupling_valid": residual.valid,
                     "task_decoupling_statistics": residual.mask_statistics,
                     "task_decoupling_provenance": residual.provenance,
                 }
-            video = stack_observation_video(future.observations, encode_observation)
-            realized_hidden = teacher.encode_realized(video, conditioning, target)
-            reward = float(outcome_cosine_reward(realized_hidden, target))
+            if task_disentangler is not None and str(
+                cfg.task_decoupling.get("reward", {}).get("type", "")
+            ) == "task_direction":
+                full_hidden = teacher.encode_realized_latent(
+                    residual.full_latent, conditioning, target
+                )
+                counterfactual_hidden = teacher.encode_realized_latent(
+                    residual.counterfactual_latent, conditioning, target
+                )
+                decomposed = task_outcome_rewards(
+                    full_hidden, counterfactual_hidden, target
+                )
+                reward = float(decomposed.task_direction)
+                task_feature_metadata["task_decoupling_rewards"] = {
+                    "full": float(decomposed.full),
+                    "counterfactual": float(decomposed.counterfactual),
+                    "margin": float(decomposed.margin),
+                    "task_direction": reward,
+                }
+            else:
+                video = stack_observation_video(future.observations, encode_observation)
+                realized_hidden = teacher.encode_realized(video, conditioning, target)
+                reward = float(outcome_cosine_reward(realized_hidden, target))
             cfm_seed = _derive_seed(
                 int(section.fpo.mc_seed), descriptor.sample_id, candidate_index, "cfm"
             )

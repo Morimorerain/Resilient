@@ -1006,6 +1006,19 @@ bash scripts/resilient/run_task_reward_audit.sh 0 1,2,3,4
 seed、第19层、timestep 500、group size 4、指标和通过阈值均在
 `configs/task_reward_audit/samhq_libero10_task7_joint1_half.yaml`中。
 
+Gate 4 未达到预先固定的0.60排序阈值（留出集task-direction pairwise accuracy为0.5526）。
+所以下列命令是明确的实验性绕过，而不是已验证默认方案。它从Stage-I adapter开始，用privileged
+oracle-box HQ-SAM task-direction reward在4卡上训练一个Stage-II epoch。HQ-SAM与第一张训练卡
+共享GPU，生命周期启动器保证训练结束或异常时释放服务和全部worker：
+
+```bash
+bash scripts/resilient/run_task_direction_outcome_fpo.sh 0,1,2,3 0
+```
+
+固定输出为
+`runs/two_stage_opsd/libero10_task7_joint1_half_seed42/stage2_task_direction_gate4_override_epoch1/`。
+现有所有配置仍默认使用原始全图reward。
+
 ## 扩展开关与基线保护
 
 以下规则为强制要求：

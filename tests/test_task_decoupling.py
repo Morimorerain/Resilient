@@ -57,6 +57,21 @@ class CounterfactualTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "feather"):
             validate_task_decoupling_config(section)
 
+    def test_training_override_requires_explicit_gate_acknowledgement(self) -> None:
+        section = OmegaConf.load(
+            "configs/task_decoupling/samhq_oracle_box_local_blur.yaml"
+        )
+        section.mode = "training_gate4_override"
+        section.reward = {
+            "type": "task_direction",
+            "gate4_override": True,
+            "invalid_mask_policy": "error",
+        }
+        validate_task_decoupling_config(section)
+        section.reward.gate4_override = False
+        with self.assertRaisesRegex(ValueError, "acknowledgement"):
+            validate_task_decoupling_config(section)
+
     def test_entity_table_is_bound_to_the_rollout_task(self) -> None:
         table = Path("configs/task_entities/libero_10_task7.yaml")
         entities = load_entity_specification(table, expected_suite="libero_10", expected_task_id=7)
