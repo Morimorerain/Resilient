@@ -1136,6 +1136,21 @@ The fixed output is
 `runs/two_stage_opsd/libero10_task7_joint1_half_seed42/stage2_task_direction_gate4_override_epoch1/`.
 The base full-frame reward remains the default in every existing configuration.
 
+The following explicit override extends the same Stage-I-initialized, task-direction experiment to
+ten epochs on physical GPUs 0--3. It retains every epoch adapter and only the newest full
+Accelerate/ZeRO resume state:
+
+```bash
+CONFIG_NAME=two_stage_opsd/fastwam_libero10_task7_joint1_half_task_direction_10ep \
+LOG_DIR=AILOG/processes/task_direction_outcome_fpo_10ep \
+  bash scripts/resilient/run_task_direction_outcome_fpo.sh 0,1,2,3 0
+```
+
+The output is
+`runs/two_stage_opsd/libero10_task7_joint1_half_seed42/stage2_task_direction_10ep/`. This remains an
+experimental Gate-4 override: increasing the epoch count does not change the failed reward-validity
+status documented above.
+
 ## Extension switches and baseline protection
 
 The following policy is mandatory:

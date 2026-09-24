@@ -1050,6 +1050,20 @@ bash scripts/resilient/run_task_direction_outcome_fpo.sh 0,1,2,3 0
 `runs/two_stage_opsd/libero10_task7_joint1_half_seed42/stage2_task_direction_gate4_override_epoch1/`。
 现有所有配置仍默认使用原始全图reward。
 
+下面的显式实验性绕过会从同一 Stage-I adapter 出发，在物理GPU 0--3上将相同的
+task-direction实验扩展到10 epoch。它保留每个epoch adapter，但只保留最新一份完整
+Accelerate/ZeRO恢复状态：
+
+```bash
+CONFIG_NAME=two_stage_opsd/fastwam_libero10_task7_joint1_half_task_direction_10ep \
+LOG_DIR=AILOG/processes/task_direction_outcome_fpo_10ep \
+  bash scripts/resilient/run_task_direction_outcome_fpo.sh 0,1,2,3 0
+```
+
+输出为
+`runs/two_stage_opsd/libero10_task7_joint1_half_seed42/stage2_task_direction_10ep/`。该实验仍是
+Gate-4实验性绕过；增加epoch不会改变上文记录的reward有效性未通过状态。
+
 ## 扩展开关与基线保护
 
 以下规则为强制要求：

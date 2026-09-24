@@ -1,0 +1,12 @@
+# @package _global_
+
+defaults:
+  - /two_stage_opsd/fastwam_libero10_task7_joint1_half_task_direction
+  - _self_
+
+# Experimental Gate-4 override extended to ten epochs from the Stage-I adapter.
+output_dir: runs/two_stage_opsd/libero10_task7_joint1_half_seed42/stage2_task_direction_10ep
+resume: null
+
+outcome_fpo:
+  num_epochs: 10
