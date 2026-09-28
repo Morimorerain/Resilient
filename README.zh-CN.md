@@ -893,6 +893,18 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 \
 这个独立配置将 Stage-II optimizer 固定为学习率 `1e-6`、weight decay `0`、梯度范数
 `0.1`和 gradient accumulation `1`；不能误用 Stage-I 的 `1e-4` 学习率。
 
+若要在四张可用GPU上把这条全图奖励训练从epoch 10严格续到epoch 20，使用下面的专用配置。
+它继续写入同一个输出目录，只改变`outcome_fpo.num_epochs`；每轮adapter仍保留，只有最新轮
+保留完整优化器/RNG状态。该配置必须已有完整的epoch 10断点，不能用于从零启动。
+
+```bash
+CUDA_VISIBLE_DEVICES=4,5,6,7 \
+  accelerate launch \
+  --config_file scripts/accelerate_configs/accelerate_opsd_zero2_ds.yaml \
+  --num_processes 4 scripts/resilient/train_two_stage_stage2.py \
+  --config-name two_stage_opsd/fastwam_libero10_task7_joint1_half_stage2_continue20
+```
+
 若要扩展已经完成的 Stage II，并严格恢复 AdamW、RNG、group 位置和 LoRA 状态，应提高总 epoch
 上限并在同一输出目录使用 `resume=auto`。与保存配置相比，只允许更改
 `outcome_fpo.num_epochs` 和断点保留参数：
@@ -1063,6 +1075,19 @@ LOG_DIR=AILOG/processes/task_direction_outcome_fpo_10ep \
 输出为
 `runs/two_stage_opsd/libero10_task7_joint1_half_seed42/stage2_task_direction_10ep/`。该实验仍是
 Gate-4实验性绕过；增加epoch不会改变上文记录的reward有效性未通过状态。
+
+若要把同一条task-direction实验从epoch 10严格续到epoch 20，使用续训配置和HQ-SAM生命周期
+启动器。第二个参数须属于四张训练卡之一；必须恢复第10轮完整优化器/RNG状态，仅加载第10轮
+推理adapter会变成另一项实验。
+
+```bash
+CONFIG_NAME=two_stage_opsd/fastwam_libero10_task7_joint1_half_task_direction_continue20 \
+LOG_DIR=AILOG/processes/task_direction_outcome_fpo_continue20 \
+  bash scripts/resilient/run_task_direction_outcome_fpo.sh 4,5,6,7 4
+```
+
+输出目录仍是`stage2_task_direction_10ep/`，因为其中包含最初十轮。续训并不意味着此前未通过的
+Gate-4奖励有效性验证现在通过。
 
 ## 扩展开关与基线保护
 

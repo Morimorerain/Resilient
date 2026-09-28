@@ -1,0 +1,10 @@
+# @package _global_
+
+defaults:
+  - /two_stage_opsd/fastwam_libero10_task7_joint1_half_stage2_10ep
+  - _self_
+
+# Strictly resume the completed full-reward epoch 10 in the same run directory.
+resume: auto
+outcome_fpo:
+  num_epochs: 20

@@ -1,0 +1,11 @@
+# @package _global_
+
+defaults:
+  - /two_stage_opsd/fastwam_libero10_task7_joint1_half_task_direction_10ep
+  - _self_
+
+# Strictly resume the completed task-direction epoch 10 in the same run directory.
+# This is still the experimental Gate-4 override, not a validated reward path.
+resume: auto
+outcome_fpo:
+  num_epochs: 20

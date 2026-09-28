@@ -967,6 +967,19 @@ The dedicated config fixes the Stage-II optimizer settings at learning rate `1e-
 decay, gradient norm `0.1`, and gradient accumulation `1`; it must not inherit the Stage-I learning
 rate `1e-4`.
 
+To continue this exact full-reward run from epoch 10 through epoch 20 on four available GPUs,
+use the dedicated continuation config. It resumes the same output directory and changes only
+`outcome_fpo.num_epochs`; all epoch adapters remain available, while only the newest epoch keeps
+the full optimizer/RNG state. Do not launch a fresh run with this config.
+
+```bash
+CUDA_VISIBLE_DEVICES=4,5,6,7 \
+  accelerate launch \
+  --config_file scripts/accelerate_configs/accelerate_opsd_zero2_ds.yaml \
+  --num_processes 4 scripts/resilient/train_two_stage_stage2.py \
+  --config-name two_stage_opsd/fastwam_libero10_task7_joint1_half_stage2_continue20
+```
+
 To extend a completed Stage II without resetting AdamW, RNG, group position, or LoRA state, increase
 the total horizon and resume the same output directory. Only `outcome_fpo.num_epochs` and checkpoint
 retention may differ from the saved resolved configuration:
@@ -1150,6 +1163,20 @@ The output is
 `runs/two_stage_opsd/libero10_task7_joint1_half_seed42/stage2_task_direction_10ep/`. This remains an
 experimental Gate-4 override: increasing the epoch count does not change the failed reward-validity
 status documented above.
+
+To strictly resume that same task-direction run from epoch 10 through epoch 20, use the
+continuation config and keep the HQ-SAM lifecycle wrapper. The second argument must name one of
+the four training GPUs. The checkpoint's optimizer/RNG state is required; loading only an epoch-10
+adapter would instead start a different experiment.
+
+```bash
+CONFIG_NAME=two_stage_opsd/fastwam_libero10_task7_joint1_half_task_direction_continue20 \
+LOG_DIR=AILOG/processes/task_direction_outcome_fpo_continue20 \
+  bash scripts/resilient/run_task_direction_outcome_fpo.sh 4,5,6,7 4
+```
+
+The run directory remains `stage2_task_direction_10ep/` because it contains the original ten
+epochs. This continuation does not establish that the Gate-4 reward-validity test passed.
 
 ## Extension switches and baseline protection
 
