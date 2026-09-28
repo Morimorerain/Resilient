@@ -8,3 +8,7 @@ defaults:
 resume: auto
 outcome_fpo:
   num_epochs: 20
+
+hydra:
+  run:
+    dir: AILOG/processes/stage2_continue20/full_reward_hydra
