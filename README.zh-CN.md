@@ -341,6 +341,10 @@ Fault 定义是 `configs/fault/` 下与模型解耦的 YAML。创建环境时，
 | E4 关节范围限制 | `structure.joint_range_limit` | 把实际关节位置裁剪到缩小后的绝对边界 | `structure/joint_range_limitation.yaml`：关节 1 限于 [-10,+10] 度 |
 | E5 周期性关节冻结 | `structure.periodic_joint_freeze` | 关节越过按角度周期分布的坏齿位置时冻结 | `structure/periodic_joint_freeze.yaml`：每 10 度触发并保持 35 个控制步 |
 
+同一第一关节的E3单档较强测评，可用
+`configs/fault/evaluation/structure/joint_backlash_6deg.yaml`。该配置同时设置物理间隙
+`gap_deg`与对应的severity元数据；不能只修改该Fault的`severity.value`。
+
 V1/V2 修改 MuJoCo 渲染几何；V3--V5 模拟相机硬件/传感器输出，在任何模型预处理之前由
 `FaultedEnvironment` 执行；E1--E5 在每个环境 dynamics step 后修改 MuJoCo 实际关节状态。
 因此十类 Fault 均不位于模型、某个特定 controller 的 evaluator 或 recovery 算法中。

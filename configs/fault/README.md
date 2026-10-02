@@ -32,6 +32,12 @@ files and can be passed directly to evaluation or training. `demo_catalog.yaml` 
 task, initial state, render settings, controller, and deterministic action phases used to visualize
 them. Embodiment entries use `JOINT_POSITION` with only the target joint command nonzero.
 
+For single-task LIBERO success-rate evaluation of reversal backlash,
+`evaluation/structure/joint_backlash_6deg.yaml` provides one stronger gap than the 3-degree
+catalog demonstration. The `severity.value` and `parameters.gap_deg` fields must agree. The
+evaluation config targets `robot0_joint1` and installs at the same simulator boundary as the
+catalog fault. This is an evaluation severity, not a claim that task success will decrease.
+
 | Family | Required parameters | Exact environment semantics |
 | --- | --- | --- |
 | `visual.camera_pose` | one `target`; rotation operation or `position_offset` | Changes MuJoCo `cam_quat`/`cam_pos`; restored on suspend/detach |

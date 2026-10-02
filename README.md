@@ -353,6 +353,10 @@ make demonstrations easy to inspect; change `severity` and the physical paramete
 | E4 Joint Range Limitation | `structure.joint_range_limit` | Clips realized joint position to reduced absolute bounds | `structure/joint_range_limitation.yaml`: joint 1 in [-10, +10] deg |
 | E5 Periodic Joint Freeze | `structure.periodic_joint_freeze` | Freezes when the joint crosses angularly periodic defective-gear positions | `structure/periodic_joint_freeze.yaml`: every 10 deg, hold 35 control steps |
 
+For a single stronger E3 evaluation on the same first joint, use
+`configs/fault/evaluation/structure/joint_backlash_6deg.yaml`. It sets both the physical `gap_deg`
+and matching severity metadata; do not change only `severity.value` for this fault.
+
 V1/V2 alter MuJoCo rendering geometry. V3--V5 model camera hardware/sensor output and are applied
 inside `FaultedEnvironment`, before any model preprocessing. E1--E5 modify realized MuJoCo joint
 state after every environment dynamics step. Thus none of the ten Faults is implemented in a model,
