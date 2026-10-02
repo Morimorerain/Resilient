@@ -929,6 +929,48 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 \
 
 参考硬件为 Linux、CUDA 12.8、bf16 与四张 RTX 6000 Ada 48 GB。
 
+### E5 周期坏齿 Fault：全图奖励与任务方向奖励对照
+
+E5 实验沿用相同的 `libero_10` task 7、互斥的训练/验证各 50 状态 manifest、基座权重、
+Stage I 的 12,000 窗口/10 epoch，以及 Stage II 每 epoch 200 组/800 个候选。唯一变化是
+仿真器底层 Fault：`robot0_joint1` 每跨越一个 10 度的齿轮位置就卡住 35 个控制步。
+`expected_embodied_fault` 会在采集和训练前核验 Fault 类型、关节、周期与持续时长；
+旧配置不设置此字段时仍保持原先仅允许 E1 半速故障的检查，不影响已有 E1 断点。
+
+先在四卡上采集并训练一次 Stage I，再让两种 Stage II 从**同一个 E5 Stage-I adapter**
+独立开始。若有八张 48 GB GPU，两种 Stage II 可以各占四卡并行运行。各训练 20 epoch，
+保留每轮 adapter，但完整优化器/RNG 状态只保留最新一次。任务方向奖励使用显式 Gate-4
+实验性绕过；E5 尚未通过奖励有效性门控，HQ-SAM oracle 框提示也不是可部署的分割方法。
+
+```bash
+export LIBERO_CONFIG_PATH="$PWD/AILOG/libero"
+export DIFFSYNTH_MODEL_BASE_PATH="$PWD/checkpoints"
+export MUJOCO_GL=egl
+CUDA_VISIBLE_DEVICES=0,1,2,3 accelerate launch --multi_gpu --num_processes 4 \
+  --mixed_precision bf16 scripts/resilient/collect_two_stage_opsd.py \
+  --config-name two_stage_opsd/fastwam_libero10_task7_e5_periodic_freeze
+CUDA_VISIBLE_DEVICES=0,1,2,3 accelerate launch \
+  --config_file scripts/accelerate_configs/accelerate_zero2_ds.yaml --num_processes 4 \
+  scripts/resilient/train_two_stage_stage1.py \
+  --config-name two_stage_opsd/fastwam_libero10_task7_e5_periodic_freeze
+CUDA_VISIBLE_DEVICES=0,1,2,3 accelerate launch \
+  --config_file scripts/accelerate_configs/accelerate_opsd_zero2_ds.yaml --num_processes 4 \
+  scripts/resilient/train_two_stage_stage2.py \
+  --config-name two_stage_opsd/fastwam_libero10_task7_e5_periodic_freeze_stage2_full_20ep
+CONFIG_NAME=two_stage_opsd/fastwam_libero10_task7_e5_periodic_freeze_stage2_task_direction_20ep \
+QUEUE_DIR="$PWD/data/.cache/task_decoupling_rpc_samhq_e5" \
+LOG_DIR="$PWD/AILOG/processes/e5_task_direction_20ep" \
+  bash scripts/resilient/run_task_direction_outcome_fpo.sh 4,5,6,7 4
+```
+
+采集按完整状态自动续跑。训练沿用前述两阶段严格断点机制；`resume=auto` 用于中断续训，
+不用于全新实验。数据与断点分别位于 Git 忽略的
+`data/generated/two_stage_opsd/libero10_task7_e5_periodic_freeze/` 和
+`runs/two_stage_opsd/libero10_task7_e5_periodic_freeze_seed42/`。本实验未增加依赖或模型资产，
+Fast-WAM、LIBERO 与 HQ-SAM 的环境和下载说明沿用前文。相同 50 个留出状态上的基座参照为
+无 Fault 49/50、E5 21/50；它不是 Stage-II 效果。后续评测只可读取验证 manifest，
+不可混入 Stage-I/Stage-II 训练状态。
+
 ## Stage II 任务区域解耦审计
 
 可选的任务区域路径先把任务物体证据与机器人本体运动分离，再决定是否允许它影响 Stage II

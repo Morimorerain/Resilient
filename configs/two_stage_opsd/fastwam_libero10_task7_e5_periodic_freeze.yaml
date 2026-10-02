@@ -1,0 +1,26 @@
+# @package _global_
+
+defaults:
+  - /two_stage_opsd/fastwam_libero10_task7_joint1_half
+  - override /fault: catalog/structure/periodic_joint_freeze
+  - _self_
+
+# E5 changes the simulator dynamics; all other Stage-I and FPO settings match
+# the original single-task E1 experiment.
+output_dir: runs/two_stage_opsd/libero10_task7_e5_periodic_freeze_seed42/stage1
+
+expected_embodied_fault:
+  family: structure.periodic_joint_freeze
+  targets: [robot0_joint1]
+  severity_name: freeze_duration
+  severity_value: 35
+  parameters:
+    period_deg: 10.0
+    phase_deg: 0.0
+    hold_steps: 35
+    release_fraction: 0.25
+
+two_stage_opsd:
+  stage1:
+    dataset_dir: data/generated/two_stage_opsd/libero10_task7_e5_periodic_freeze
+

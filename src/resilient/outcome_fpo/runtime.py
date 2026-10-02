@@ -33,6 +33,7 @@ from fastwam.datasets.lerobot.robot_video_dataset import DEFAULT_PROMPT
 from fastwam.datasets.lerobot.utils.normalizer import load_dataset_stats_from_json
 from fastwam.utils.pytorch_utils import set_global_seed
 from resilient.faults import build_fault_pipeline
+from resilient.faults.validation import validate_embodied_fault_contract
 from resilient.opsd.adapters import (
     FastWAMLoraConfig,
     inject_fastwam_aligned_lora,
@@ -297,14 +298,11 @@ def validate_outcome_fpo_config(
 
     fault_cfg = OmegaConf.to_container(cfg.fault, resolve=True)
     fault_metadata = build_fault_pipeline(fault_cfg).metadata()
-    faults = fault_metadata["faults"]
-    if len(faults) != 1 or faults[0]["family"] != "structure.joint_motion":
-        raise ValueError("The first outcome-FPO configuration requires one joint-motion Fault.")
-    if faults[0]["targets"] != ["robot0_joint1"]:
-        raise ValueError("The first outcome-FPO configuration targets robot0_joint1.")
-    severity = faults[0]["severity"]
-    if severity["name"] != "motion_retention" or float(severity["value"]) != 0.5:
-        raise ValueError("The first outcome-FPO configuration requires retention=0.5.")
+    expectation = cfg.get("expected_embodied_fault")
+    validate_embodied_fault_contract(
+        fault_metadata,
+        None if expectation is None else OmegaConf.to_container(expectation, resolve=True),
+    )
 
     training_path = _resolve_project_path(str(section.split.training_reference_manifest))
     validation_path = _resolve_project_path(str(section.split.validation_manifest))

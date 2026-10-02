@@ -10,6 +10,7 @@ from typing import Any
 from omegaconf import DictConfig, OmegaConf
 
 from resilient.faults import build_fault_pipeline
+from resilient.faults.validation import validate_embodied_fault_contract
 from resilient.state_banks import assert_disjoint_manifests, load_manifest
 
 
@@ -59,9 +60,7 @@ def collection_config_hash(cfg: DictConfig) -> str:
         "task": OmegaConf.to_container(section.task, resolve=True),
         "split": OmegaConf.to_container(section.split, resolve=True),
         "dataset_stats_path": str(section.dataset_stats_path),
-        "collection": OmegaConf.to_container(
-            section.stage1.collection, resolve=True
-        ),
+        "collection": OmegaConf.to_container(section.stage1.collection, resolve=True),
         "data": {
             "num_frames": int(cfg.data.train.num_frames),
             "action_video_freq_ratio": int(cfg.data.train.action_video_freq_ratio),
@@ -87,14 +86,11 @@ def validate_fault_and_split(cfg: DictConfig) -> dict[str, Any]:
 
     fault_cfg = OmegaConf.to_container(cfg.fault, resolve=True)
     fault_metadata = build_fault_pipeline(fault_cfg).metadata()
-    faults = fault_metadata["faults"]
-    if len(faults) != 1 or faults[0]["family"] != "structure.joint_motion":
-        raise ValueError("The first experiment requires one simulator joint-motion Fault.")
-    if faults[0]["targets"] != ["robot0_joint1"]:
-        raise ValueError("The first experiment must target robot0_joint1.")
-    severity = faults[0]["severity"]
-    if severity["name"] != "motion_retention" or float(severity["value"]) != 0.5:
-        raise ValueError("The first experiment requires joint1 motion retention=0.5.")
+    expectation = cfg.get("expected_embodied_fault")
+    validate_embodied_fault_contract(
+        fault_metadata,
+        None if expectation is None else OmegaConf.to_container(expectation, resolve=True),
+    )
 
     training_path = resolve_project_path(section.split.training_reference_manifest)
     validation_path = resolve_project_path(section.split.validation_manifest)

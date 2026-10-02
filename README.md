@@ -1004,6 +1004,53 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 \
 
 Hardware remains Linux, CUDA 12.8, bf16, and four RTX 6000 Ada 48 GB GPUs.
 
+### E5 periodic-gear Fault: paired full and task-direction rewards
+
+The E5 experiment reuses the same `libero_10` task 7, disjoint 50-state training/validation
+manifests, base checkpoint, 12,000-window/10-epoch Stage I, and 200 groups/800 candidates per
+Stage-II epoch. Only the simulator-owned Fault changes: `robot0_joint1` sticks for 35 control steps
+after crossing each 10-degree gear position. An explicit `expected_embodied_fault` contract checks
+its family, joint, period, and duration before collection or training. Omitting this contract retains
+the original E1-only half-motion guard, including compatibility with existing E1 checkpoints.
+
+Run Stage-I collection and training once on four GPUs, then launch the two Stage-II variants from
+**the same E5 Stage-I adapter**. With eight available 48 GB GPUs, the two Stage-II commands may run
+simultaneously on separate four-GPU groups. Each runs 20 epochs, retaining every epoch adapter but
+only the latest full optimizer/RNG state. The task-direction arm is an explicit Gate-4 override:
+its HQ-SAM oracle-box reward has **not** passed the reward-validity gate for E5 and is not a
+deployable segmentation method.
+
+```bash
+export LIBERO_CONFIG_PATH="$PWD/AILOG/libero"
+export DIFFSYNTH_MODEL_BASE_PATH="$PWD/checkpoints"
+export MUJOCO_GL=egl
+CUDA_VISIBLE_DEVICES=0,1,2,3 accelerate launch --multi_gpu --num_processes 4 \
+  --mixed_precision bf16 scripts/resilient/collect_two_stage_opsd.py \
+  --config-name two_stage_opsd/fastwam_libero10_task7_e5_periodic_freeze
+CUDA_VISIBLE_DEVICES=0,1,2,3 accelerate launch \
+  --config_file scripts/accelerate_configs/accelerate_zero2_ds.yaml --num_processes 4 \
+  scripts/resilient/train_two_stage_stage1.py \
+  --config-name two_stage_opsd/fastwam_libero10_task7_e5_periodic_freeze
+CUDA_VISIBLE_DEVICES=0,1,2,3 accelerate launch \
+  --config_file scripts/accelerate_configs/accelerate_opsd_zero2_ds.yaml --num_processes 4 \
+  scripts/resilient/train_two_stage_stage2.py \
+  --config-name two_stage_opsd/fastwam_libero10_task7_e5_periodic_freeze_stage2_full_20ep
+CONFIG_NAME=two_stage_opsd/fastwam_libero10_task7_e5_periodic_freeze_stage2_task_direction_20ep \
+QUEUE_DIR="$PWD/data/.cache/task_decoupling_rpc_samhq_e5" \
+LOG_DIR="$PWD/AILOG/processes/e5_task_direction_20ep" \
+  bash scripts/resilient/run_task_direction_outcome_fpo.sh 4,5,6,7 4
+```
+
+Collection resumes per completed state. Training uses the same Stage-I and Stage-II strict-resume
+mechanisms documented above; `resume=auto` resumes an interrupted Stage-II run, not a fresh one.
+The generated data and all checkpoints are ignored by Git at
+`data/generated/two_stage_opsd/libero10_task7_e5_periodic_freeze/` and
+`runs/two_stage_opsd/libero10_task7_e5_periodic_freeze_seed42/`. No dependency or model asset is
+added: use the Fast-WAM, LIBERO, and HQ-SAM installation and asset instructions above. The
+clean-vs-E5 base-policy reference on the held-out 50 states is 49/50 versus 21/50; it is not a
+Stage-II result. Evaluation must continue to use only the validation manifest, never Stage-I or
+Stage-II training states.
+
 ## Stage-II task-region decoupling audit
 
 The optional task-region path isolates task-object evidence from robot/body motion before it is
