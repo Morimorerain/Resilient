@@ -7,7 +7,7 @@ defaults:
 
 # E5 changes the simulator dynamics; all other Stage-I and FPO settings match
 # the original single-task E1 experiment.
-output_dir: runs/two_stage_opsd/libero10_task7_e5_periodic_freeze_seed42/stage1
+output_dir: runs/two_stage_opsd/libero10_task7_e5_periodic_freeze_seed42
 
 expected_embodied_fault:
   family: structure.periodic_joint_freeze
@@ -23,4 +23,3 @@ expected_embodied_fault:
 two_stage_opsd:
   stage1:
     dataset_dir: data/generated/two_stage_opsd/libero10_task7_e5_periodic_freeze
-
