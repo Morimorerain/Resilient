@@ -1036,10 +1036,14 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 accelerate launch \
   scripts/resilient/train_two_stage_stage2.py \
   --config-name two_stage_opsd/fastwam_libero10_task7_e5_periodic_freeze_stage2_full_20ep
 CONFIG_NAME=two_stage_opsd/fastwam_libero10_task7_e5_periodic_freeze_stage2_task_direction_20ep \
+TRAIN_PORT=29501 \
 QUEUE_DIR="$PWD/data/.cache/task_decoupling_rpc_samhq_e5" \
 LOG_DIR="$PWD/AILOG/processes/e5_task_direction_20ep" \
   bash scripts/resilient/run_task_direction_outcome_fpo.sh 4,5,6,7 4
 ```
+
+`TRAIN_PORT` separates this distributed job from a concurrently launched full-reward job; choose
+another free local port if 29501 is already occupied. Its default remains 29500 for existing runs.
 
 Collection resumes per completed state. Training uses the same Stage-I and Stage-II strict-resume
 mechanisms documented above; `resume=auto` resumes an interrupted Stage-II run, not a fresh one.

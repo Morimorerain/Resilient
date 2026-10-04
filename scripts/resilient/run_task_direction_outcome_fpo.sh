@@ -10,6 +10,7 @@ QUEUE_DIR="${QUEUE_DIR:-${PROJECT_ROOT}/data/.cache/task_decoupling_rpc_samhq}"
 SAM_CHECKPOINT="${SAM_CHECKPOINT:-${PROJECT_ROOT}/checkpoints/sam_hq/sam_hq_vit_h.pth}"
 LOG_DIR="${LOG_DIR:-${PROJECT_ROOT}/AILOG/processes/task_direction_outcome_fpo_epoch1}"
 CONFIG_NAME="${CONFIG_NAME:-two_stage_opsd/fastwam_libero10_task7_joint1_half_task_direction}"
+TRAIN_PORT="${TRAIN_PORT:-29500}"
 
 IFS=',' read -r -a TRAIN_GPU_ARRAY <<< "${TRAIN_GPUS}"
 if [[ "${#TRAIN_GPU_ARRAY[@]}" -ne 4 ]]; then
@@ -53,6 +54,7 @@ SAM_PID=$!
 setsid env CUDA_VISIBLE_DEVICES="${TRAIN_GPUS}" MUJOCO_GL=egl PYTHONUNBUFFERED=1 \
   "${FASTWAM_ENV}/bin/accelerate" launch \
   --config_file scripts/accelerate_configs/accelerate_opsd_zero2_ds.yaml \
+  --main_process_port "${TRAIN_PORT}" \
   --num_processes 4 scripts/resilient/train_two_stage_stage2.py \
   --config-name "${CONFIG_NAME}" \
   > "${LOG_DIR}/training.log" 2>&1 &

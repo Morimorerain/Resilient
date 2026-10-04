@@ -958,10 +958,14 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 accelerate launch \
   scripts/resilient/train_two_stage_stage2.py \
   --config-name two_stage_opsd/fastwam_libero10_task7_e5_periodic_freeze_stage2_full_20ep
 CONFIG_NAME=two_stage_opsd/fastwam_libero10_task7_e5_periodic_freeze_stage2_task_direction_20ep \
+TRAIN_PORT=29501 \
 QUEUE_DIR="$PWD/data/.cache/task_decoupling_rpc_samhq_e5" \
 LOG_DIR="$PWD/AILOG/processes/e5_task_direction_20ep" \
   bash scripts/resilient/run_task_direction_outcome_fpo.sh 4,5,6,7 4
 ```
+
+`TRAIN_PORT`用于区分同时运行的全图奖励分布式作业；如果29501已被占用，应改为其他空闲本地
+端口。旧实验仍默认使用29500。
 
 采集按完整状态自动续跑。训练沿用前述两阶段严格断点机制；`resume=auto` 用于中断续训，
 不用于全新实验。数据与断点分别位于 Git 忽略的
