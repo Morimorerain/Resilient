@@ -967,6 +967,46 @@ LOG_DIR="$PWD/AILOG/processes/e5_task_direction_20ep" \
 `TRAIN_PORT`用于区分同时运行的全图奖励分布式作业；如果29501已被占用，应改为其他空闲本地
 端口。旧实验仍默认使用29500。
 
+### E5 仅 Stage II 消融（不使用 Stage I）
+
+两组各训练 10 epoch，独立从发布的 Fast-WAM 基座权重开始：
+`two_stage_opsd.stage2.initial_adapter` 与 `adapter.initial_checkpoint` 均为 `null`，不加载
+Stage-I adapter。固定 `libero_10` task 7、同一个仿真器底层 E5 Fault（关节 1 每转过 10 度
+卡住 35 个控制步）、seed 42、上文互不重叠的 50 个训练/50 个验证状态；每轮 200 个 group、
+800 个候选 action chunk。两组仅奖励不同：冻结视觉分支全图 outcome 相似度，与实验性的
+HQ-SAM oracle 框任务方向奖励。后者仍是 Gate-4 绕过实验，不代表已验证的可部署奖励。
+训练不读取验证状态。
+
+需四张空闲物理 GPU；示例使用 0、1、3、4 卡。解耦奖励启动器默认仍使用需要 Stage I 的旧入口；
+本消融必须显式设置 `TRAIN_ENTRYPOINT=train_outcome_fpo.py`。显卡或磁盘紧张时顺序运行，
+每组启动前检查磁盘余量：一份完整 Accelerate/ZeRO 续训状态可能超过 50 GB。配置保留每轮
+adapter，仅保留最新完整续训状态；若仍需严格断点续训，不要删除该状态。
+
+```bash
+export LIBERO_CONFIG_PATH="$PWD/AILOG/libero"
+export DIFFSYNTH_MODEL_BASE_PATH="$PWD/checkpoints"
+export MUJOCO_GL=egl
+CUDA_VISIBLE_DEVICES=0,1,3,4 accelerate launch \
+  --config_file scripts/accelerate_configs/accelerate_opsd_zero2_ds.yaml \
+  --main_process_port 29502 --num_processes 4 \
+  scripts/resilient/train_outcome_fpo.py \
+  --config-name two_stage_opsd/fastwam_libero10_task7_e5_direct_stage2_full_10ep
+
+TRAIN_ENTRYPOINT=train_outcome_fpo.py \
+FASTWAM_ENV="$PWD/.venv" \
+CONFIG_NAME=two_stage_opsd/fastwam_libero10_task7_e5_direct_stage2_task_direction_10ep \
+TRAIN_PORT=29503 \
+QUEUE_DIR="$PWD/data/.cache/task_decoupling_rpc_samhq_e5_direct_stage2" \
+LOG_DIR="$PWD/AILOG/processes/e5_direct_stage2_task_direction_10ep" \
+  bash scripts/resilient/run_task_direction_outcome_fpo.sh 0,1,3,4 0
+```
+
+输出分别位于 `runs/two_stage_opsd/libero10_task7_e5_periodic_freeze_seed42/` 下的
+`direct_stage2_full_reward_10ep/` 与 `direct_stage2_task_direction_10ep/`；这些目录及 HQ-SAM
+RPC 队列均不上传 Git。本实验复用上文 HQ-SAM 权重和环境安装方法，不新增依赖或资产。
+运行第一条命令前先激活上文建立的 Fast-WAM 环境；解耦奖励启动器的 `FASTWAM_ENV`
+应指向同一环境。
+
 采集按完整状态自动续跑。训练沿用前述两阶段严格断点机制；`resume=auto` 用于中断续训，
 不用于全新实验。数据与断点分别位于 Git 忽略的
 `data/generated/two_stage_opsd/libero10_task7_e5_periodic_freeze/` 和

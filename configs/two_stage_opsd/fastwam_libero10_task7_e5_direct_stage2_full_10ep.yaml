@@ -1,0 +1,18 @@
+# @package _global_
+
+defaults:
+  - /two_stage_opsd/fastwam_libero10_task7_e5_periodic_freeze_stage2_full_20ep
+  - _self_
+
+# Direct Stage II starts from the released Fast-WAM weights, not a Stage-I adapter.
+output_dir: runs/two_stage_opsd/libero10_task7_e5_periodic_freeze_seed42/direct_stage2_full_reward_10ep
+
+two_stage_opsd:
+  stage2:
+    initial_adapter: null
+
+adapter:
+  initial_checkpoint: null
+
+outcome_fpo:
+  num_epochs: 10

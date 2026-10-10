@@ -1,0 +1,25 @@
+# @package _global_
+
+defaults:
+  - /two_stage_opsd/fastwam_libero10_task7_e5_periodic_freeze_stage2_task_direction_20ep
+  - _self_
+
+# Match the direct full-reward arm except for the task-direction reward.
+output_dir: runs/two_stage_opsd/libero10_task7_e5_periodic_freeze_seed42/direct_stage2_task_direction_10ep
+
+two_stage_opsd:
+  stage2:
+    initial_adapter: null
+
+adapter:
+  initial_checkpoint: null
+
+outcome_fpo:
+  num_epochs: 10
+
+task_decoupling:
+  mask_provider:
+    queue_dir: data/.cache/task_decoupling_rpc_samhq_e5_direct_stage2
+  artifacts:
+    collection_dir: evaluate_results/task_decoupling/libero10_task7_e5_direct_stage2
+    output_dir: evaluate_results/task_decoupling/libero10_task7_e5_direct_stage2_samhq_oracle_box

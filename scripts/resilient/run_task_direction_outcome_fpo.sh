@@ -11,6 +11,12 @@ SAM_CHECKPOINT="${SAM_CHECKPOINT:-${PROJECT_ROOT}/checkpoints/sam_hq/sam_hq_vit_
 LOG_DIR="${LOG_DIR:-${PROJECT_ROOT}/AILOG/processes/task_direction_outcome_fpo_epoch1}"
 CONFIG_NAME="${CONFIG_NAME:-two_stage_opsd/fastwam_libero10_task7_joint1_half_task_direction}"
 TRAIN_PORT="${TRAIN_PORT:-29500}"
+TRAIN_ENTRYPOINT="${TRAIN_ENTRYPOINT:-train_two_stage_stage2.py}"
+
+if [[ "${TRAIN_ENTRYPOINT}" != "train_two_stage_stage2.py" && "${TRAIN_ENTRYPOINT}" != "train_outcome_fpo.py" ]]; then
+  echo "TRAIN_ENTRYPOINT must be train_two_stage_stage2.py or train_outcome_fpo.py." >&2
+  exit 2
+fi
 
 IFS=',' read -r -a TRAIN_GPU_ARRAY <<< "${TRAIN_GPUS}"
 if [[ "${#TRAIN_GPU_ARRAY[@]}" -ne 4 ]]; then
@@ -55,12 +61,13 @@ setsid env CUDA_VISIBLE_DEVICES="${TRAIN_GPUS}" MUJOCO_GL=egl PYTHONUNBUFFERED=1
   "${FASTWAM_ENV}/bin/accelerate" launch \
   --config_file scripts/accelerate_configs/accelerate_opsd_zero2_ds.yaml \
   --main_process_port "${TRAIN_PORT}" \
-  --num_processes 4 scripts/resilient/train_two_stage_stage2.py \
+  --num_processes 4 "scripts/resilient/${TRAIN_ENTRYPOINT}" \
   --config-name "${CONFIG_NAME}" \
   > "${LOG_DIR}/training.log" 2>&1 &
 TRAIN_PID=$!
 
 echo "Task-direction Outcome-FPO PID=${TRAIN_PID}; HQ-SAM PID=${SAM_PID}."
 echo "Config: ${CONFIG_NAME}"
+echo "Training entrypoint: ${TRAIN_ENTRYPOINT}"
 echo "Logs: ${LOG_DIR}"
 wait "${TRAIN_PID}"

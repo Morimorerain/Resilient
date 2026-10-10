@@ -1045,6 +1045,49 @@ LOG_DIR="$PWD/AILOG/processes/e5_task_direction_20ep" \
 `TRAIN_PORT` separates this distributed job from a concurrently launched full-reward job; choose
 another free local port if 29501 is already occupied. Its default remains 29500 for existing runs.
 
+### E5 direct Stage-II ablation (no Stage I)
+
+These two 10-epoch runs start independently from the released Fast-WAM checkpoint: both
+`two_stage_opsd.stage2.initial_adapter` and `adapter.initial_checkpoint` are `null`. They use
+`libero_10` task 7, the same E5 simulator Fault (joint 1 sticks for 35 control steps every 10
+degrees), seed 42, the disjoint 50-state training/validation manifests above, and 200 groups / 800
+candidate action chunks per epoch. They differ only in the reward: frozen full-video outcome
+similarity versus the experimental HQ-SAM oracle-box task-direction reward. The latter remains a
+Gate-4 override, not a validated deployable reward. Training does not read validation states.
+
+Use four available physical GPUs; the example below uses 0, 1, 3, and 4. The task-direction
+launcher defaults to the original Stage-I-dependent entrypoint. Set `TRAIN_ENTRYPOINT` explicitly
+to `train_outcome_fpo.py` for this direct ablation. Run the commands sequentially if GPU or disk
+space is limited, and check free disk space before each run: a complete Accelerate/ZeRO resume
+state can exceed 50 GB. The configured retention keeps every epoch's adapter and only the latest
+full resume state. Do not remove that state if strict resume is still needed.
+
+```bash
+export LIBERO_CONFIG_PATH="$PWD/AILOG/libero"
+export DIFFSYNTH_MODEL_BASE_PATH="$PWD/checkpoints"
+export MUJOCO_GL=egl
+CUDA_VISIBLE_DEVICES=0,1,3,4 accelerate launch \
+  --config_file scripts/accelerate_configs/accelerate_opsd_zero2_ds.yaml \
+  --main_process_port 29502 --num_processes 4 \
+  scripts/resilient/train_outcome_fpo.py \
+  --config-name two_stage_opsd/fastwam_libero10_task7_e5_direct_stage2_full_10ep
+
+TRAIN_ENTRYPOINT=train_outcome_fpo.py \
+FASTWAM_ENV="$PWD/.venv" \
+CONFIG_NAME=two_stage_opsd/fastwam_libero10_task7_e5_direct_stage2_task_direction_10ep \
+TRAIN_PORT=29503 \
+QUEUE_DIR="$PWD/data/.cache/task_decoupling_rpc_samhq_e5_direct_stage2" \
+LOG_DIR="$PWD/AILOG/processes/e5_direct_stage2_task_direction_10ep" \
+  bash scripts/resilient/run_task_direction_outcome_fpo.sh 0,1,3,4 0
+```
+
+The outputs are respectively `runs/two_stage_opsd/libero10_task7_e5_periodic_freeze_seed42/`
+`direct_stage2_full_reward_10ep/` and `direct_stage2_task_direction_10ep/`. These paths and
+the HQ-SAM RPC queue are ignored by Git. Follow the HQ-SAM weight and environment setup above;
+the direct experiment introduces no new dependency or asset. Activate the Fast-WAM environment
+created in the setup section before running the first command; set `FASTWAM_ENV` to that same
+environment for the task-direction launcher.
+
 Collection resumes per completed state. Training uses the same Stage-I and Stage-II strict-resume
 mechanisms documented above; `resume=auto` resumes an interrupted Stage-II run, not a fresh one.
 The generated data and all checkpoints are ignored by Git at
