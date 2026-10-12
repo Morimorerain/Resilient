@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 import unittest
+from contextlib import nullcontext
 
 import torch
+import torch.nn as nn
 from hydra import compose, initialize_config_dir
 
 from resilient.outcome_fpo.ppo.advantage import generalized_advantage_estimate
+from resilient.outcome_fpo.ppo.collector import PPOEpisode, PPOTransition
 from resilient.outcome_fpo.ppo.model import ConditionValueHead
 from resilient.outcome_fpo.ppo.runtime import validate_actor_critic_fpo_config
-from resilient.outcome_fpo.types import ActionConditioning
+from resilient.outcome_fpo.ppo.trainer import ActorCriticFPOTrainer
+from resilient.outcome_fpo.types import ActionConditioning, CandidateSample
 
 
 class GAEChecks(unittest.TestCase):
@@ -92,6 +96,76 @@ class ConfigChecks(unittest.TestCase):
         provenance = validate_actor_critic_fpo_config(ppo)
         self.assertEqual(provenance["maximum_chunks_per_epoch"], 768)
         self.assertEqual(provenance["validation_states"], 50)
+
+
+class TrainerChecks(unittest.TestCase):
+    def test_actor_and_critic_update_on_one_terminal_episode(self) -> None:
+        class TinyScorer(nn.Module):
+            def __init__(self) -> None:
+                super().__init__()
+                self.actor = nn.Parameter(torch.zeros(()))
+                self.critic = nn.Parameter(torch.zeros(()))
+
+            def forward(self, _condition, _action, noise, _timestep):
+                return self.actor.expand(noise.shape[0]), self.critic.reshape(1)
+
+        class CPUAccelerator:
+            @staticmethod
+            def autocast():
+                return nullcontext()
+
+            @staticmethod
+            def backward(loss):
+                loss.backward()
+
+            @staticmethod
+            def clip_grad_norm_(parameters, max_norm):
+                return torch.nn.utils.clip_grad_norm_(parameters, max_norm)
+
+        scorer = TinyScorer()
+        trainer = ActorCriticFPOTrainer(
+            scoring_model=scorer,
+            optimizer=torch.optim.SGD(scorer.parameters(), lr=0.01),
+            accelerator=CPUAccelerator(),
+            update_epochs=2,
+            clipping_epsilon=0.05,
+            log_ratio_clip=3.0,
+            advantage_clip=5.0,
+            advantage_eps=1e-6,
+            max_grad_norm=1.0,
+            max_chunks_per_episode=16,
+            minibatch_size=4,
+            gamma=0.99,
+            gae_lambda=0.95,
+            reward_center=0.14,
+            reward_scale=0.04,
+            value_coefficient=0.25,
+            value_clip_range=0.5,
+        )
+        candidate = CandidateSample(
+            normalized_action=torch.zeros(32, 7),
+            reward=0.18,
+            mc_noise=torch.zeros(8, 32, 7),
+            mc_timestep=torch.zeros(8),
+            old_cfm_loss=torch.zeros(8),
+            inference_seed=1,
+            metadata={},
+        )
+        conditioning = ActionConditioning(
+            torch.zeros(1, 3, 16, 16),
+            torch.zeros(1, 2, 4),
+            torch.ones(1, 2, dtype=torch.bool),
+        )
+        episode = PPOEpisode(
+            transitions=(PPOTransition(conditioning, candidate, 0.0, 0.18, True),),
+            bootstrap_value=0.0,
+            metadata={},
+        )
+        result = trainer.train_episode(episode)
+        self.assertEqual(result["chunks"], 1)
+        self.assertEqual(result["optimizer_steps"], 8)
+        self.assertLess(float(scorer.actor), 0.0)
+        self.assertGreater(float(scorer.critic), 0.0)
 
 
 if __name__ == "__main__":
