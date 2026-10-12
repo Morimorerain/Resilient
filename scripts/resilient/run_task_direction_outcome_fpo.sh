@@ -19,12 +19,12 @@ if [[ "${TRAIN_ENTRYPOINT}" != "train_two_stage_stage2.py" && "${TRAIN_ENTRYPOIN
 fi
 
 IFS=',' read -r -a TRAIN_GPU_ARRAY <<< "${TRAIN_GPUS}"
-if [[ "${#TRAIN_GPU_ARRAY[@]}" -ne 4 ]]; then
-  echo "TRAIN_GPUS must contain exactly four comma-separated GPU indices." >&2
+if [[ "${#TRAIN_GPU_ARRAY[@]}" -ne 4 && "${#TRAIN_GPU_ARRAY[@]}" -ne 8 ]]; then
+  echo "TRAIN_GPUS must contain exactly four or eight comma-separated GPU indices." >&2
   exit 2
 fi
 if [[ ! ",${TRAIN_GPUS}," =~ ,${SAM_GPU}, ]]; then
-  echo "For this four-GPU run, SAM_GPU must be one of TRAIN_GPUS." >&2
+  echo "SAM_GPU must be one of TRAIN_GPUS." >&2
   exit 2
 fi
 
@@ -61,7 +61,7 @@ setsid env CUDA_VISIBLE_DEVICES="${TRAIN_GPUS}" MUJOCO_GL=egl PYTHONUNBUFFERED=1
   "${FASTWAM_ENV}/bin/accelerate" launch \
   --config_file scripts/accelerate_configs/accelerate_opsd_zero2_ds.yaml \
   --main_process_port "${TRAIN_PORT}" \
-  --num_processes 4 "scripts/resilient/${TRAIN_ENTRYPOINT}" \
+  --num_processes "${#TRAIN_GPU_ARRAY[@]}" "scripts/resilient/${TRAIN_ENTRYPOINT}" \
   --config-name "${CONFIG_NAME}" \
   > "${LOG_DIR}/training.log" 2>&1 &
 TRAIN_PID=$!

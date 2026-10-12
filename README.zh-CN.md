@@ -1015,6 +1015,80 @@ Fast-WAM、LIBERO 与 HQ-SAM 的环境和下载说明沿用前文。相同 50 �
 无 Fault 49/50、E5 21/50；它不是 Stage-II 效果。后续评测只可读取验证 manifest，
 不可混入 Stage-I/Stage-II 训练状态。
 
+### E5 可选 PPO 风格 FPO 第二阶段（不使用 Stage I）
+
+配置 `outcome_fpo.algorithm=actor_critic_fpo` 会进入独立的
+`src/resilient/outcome_fpo/ppo/` 路径；不设置该参数或设置为 `group_relative_fpo`，旧有
+GRPO 风格代码保持不变。这里是 **PPO 风格 FPO**，不是具有精确动作 log-probability 的标准
+PPO：actor 的截断 ratio 沿用已有 Monte Carlo CFM 近似。训练专用 critic 仅读取当前 RGB
+图像、有效语言 token 和 proprio；按 action chunk 计算 GAE，替代组内相对 advantage。
+Actor 仍只训练 rank 64、alpha 128 的 Recovery LoRA，Fast-WAM 基座和健康视觉 Teacher 冻结。
+
+本实验直接从 Fast-WAM 发布权重开始，不加载 Stage I。沿用上文 E5 第一关节周期卡顿、
+seed 42 和训练/验证互斥各 50 个状态。奖励**仅**为已有 HQ-SAM oracle box 的
+`task_direction`；成功只用于终止和诊断，不额外加入奖励。这一奖励仍是未通过 Gate 4 的
+仿真实验性覆盖，**不能直接部署于真机**。与旧 main 10 步、shadow 32 步的组内候选不同，
+Student 在单个主 Fault 环境中实际执行完整 32 步，取 0、4、…、32 共 9 帧。若在 chunk
+中途成功，仿真对照仍将该 chunk 执行完以维持相同奖励定义，然后结束 episode；这不代表
+真机的立即停机策略。
+
+默认训练 10 epoch；每轮从 50 个训练状态中轮换 48 个并均分至 8 卡；每个 episode 最多
+16 个 chunk。因此每轮最多 768 个 chunk、24,576 个控制步，与旧实验 800 个候选 chunk、
+25,600 个 shadow 控制步接近；提前成功会使实际交互更少，应查看
+`ppo_rollouts_rank_XX.jsonl` 的 `control_steps`，不要只比较 epoch。每个 chunk 复用 8 次
+CFM Monte Carlo；actor LR `1e-6`、critic LR `1e-4`、gamma `0.99`、GAE lambda `0.95`、
+截断系数 `0.05`、value loss 系数 `0.25`、value 截断 `0.5`、两轮更新、每卡 minibatch 4、
+梯度范数上限 `0.1`。依据之前 E5 奖励日志固定归一化为
+`(task_direction - 0.14) / 0.04`，原始奖励也写入日志。
+
+环境、Fast-WAM/LIBERO/HQ-SAM 权重与下载方法沿用上文，不增加 Python 依赖、权重或
+requirements 修改。8 张 48 GB GPU 可用、0 卡同时运行 HQ-SAM 时，先无 CUDA 验证配置，
+然后运行：
+
+```bash
+python scripts/resilient/train_outcome_fpo.py \
+  --config-name two_stage_opsd/fastwam_libero10_task7_e5_direct_stage2_task_direction_ppo_10ep \
+  outcome_fpo.validate_only=true
+export LIBERO_CONFIG_PATH="$PWD/AILOG/libero"
+export DIFFSYNTH_MODEL_BASE_PATH="$PWD/checkpoints"
+TRAIN_ENTRYPOINT=train_outcome_fpo.py FASTWAM_ENV="$PWD/.venv" \
+CONFIG_NAME=two_stage_opsd/fastwam_libero10_task7_e5_direct_stage2_task_direction_ppo_10ep \
+TRAIN_PORT=29511 QUEUE_DIR="$PWD/data/.cache/task_decoupling_rpc_samhq_e5_direct_stage2_ppo" \
+LOG_DIR="$PWD/AILOG/processes/e5_direct_stage2_task_direction_ppo_10ep" \
+  bash scripts/resilient/run_task_direction_outcome_fpo.sh 0,1,2,3,4,5,6,7 0
+```
+
+`bash scripts/resilient/run_e5_ppo_experiment.sh` 会按同一配置训练，并仅在第10轮正常
+完成后自动启动 task 7 的50个未见状态验证。
+
+Git 忽略的输出目录为 `runs/two_stage_opsd/libero10_task7_e5_periodic_freeze_seed42/`
+`direct_stage2_task_direction_ppo_10ep/`。每轮保留 `recovery_adapter.pt`、
+`value_head.pt` 和解析后的配置，仅保留最新一次完整优化器/RNG 续训状态。
+`resume=auto` 必须有完整状态及原配置；允许把相对路径 `runs/...` 软链接到容量更大的磁盘。
+Critic 仅供训练，测评推理不加载。
+
+训练结束后只验证 LIBERO-10 task 7 的 50 个未见状态。把下面的 epoch 目录占位符替换为
+实际 `epoch_XXXX_step_XXXXXXXX` 名称：
+
+```bash
+EPOCH_DIR=runs/two_stage_opsd/libero10_task7_e5_periodic_freeze_seed42/direct_stage2_task_direction_ppo_10ep/checkpoints/epochs/epoch_0010_step_XXXXXXXX
+CUDA_VISIBLE_DEVICES=0,1,2,3 python experiments/libero/run_libero_manager.py \
+  task=libero_uncond_2cam224_1e-4 ckpt=checkpoints/fastwam_release/libero_uncond_2cam224.pt \
+  MULTIRUN.task_file=configs/evaluation_tasks/libero10_task7.txt MULTIRUN.num_gpus=4 \
+  EVALUATION.num_trials=50 EVALUATION.replan_steps=32 EVALUATION.save_rollout_videos=false \
+  EVALUATION.sigma_shift=5.0 \
+  EVALUATION.fault_config_path=configs/fault/catalog/structure/periodic_joint_freeze.yaml \
+  EVALUATION.initial_state_bank.enabled=true \
+  EVALUATION.initial_state_bank.manifest=data/libero_state_banks/opsd_step500_unseen_v1/validation_manifest.json \
+  EVALUATION.initial_state_bank.training_manifest=data/libero_state_banks/opsd_step500_unseen_v1/training_reference_manifest.json \
+  EVALUATION.opsd_adapter.enabled=true EVALUATION.opsd_adapter.checkpoint="$EPOCH_DIR/recovery_adapter.pt" \
+  EVALUATION.opsd_adapter.training_config=runs/two_stage_opsd/libero10_task7_e5_periodic_freeze_seed42/direct_stage2_task_direction_ppo_10ep/resolved_config.yaml \
+  EVALUATION.output_dir=evaluate_results/two_stage_opsd/libero10_task7_e5_direct_stage2_ppo_epoch10
+```
+
+要严格比较旧 GRPO，须用同样 `EVALUATION.replan_steps=32` 重新验证其 adapter；先前
+10 步控制周期的 SR 并不是控制条件一致的对照。
+
 ## Stage II 任务区域解耦审计
 
 可选的任务区域路径先把任务物体证据与机器人本体运动分离，再决定是否允许它影响 Stage II

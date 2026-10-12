@@ -1098,6 +1098,80 @@ clean-vs-E5 base-policy reference on the held-out 50 states is 49/50 versus 21/5
 Stage-II result. Evaluation must continue to use only the validation manifest, never Stage-I or
 Stage-II training states.
 
+### Optional E5 PPO-style FPO Stage II (no Stage I)
+
+Set `outcome_fpo.algorithm=actor_critic_fpo` to use the independent
+`src/resilient/outcome_fpo/ppo/` path. An absent switch or `group_relative_fpo` keeps the
+original GRPO-style implementation unchanged. This is **PPO-style FPO**, not exact PPO: the
+clipped actor ratio is the existing Monte Carlo CFM surrogate, not an exact action log-probability.
+The new training-only critic reads the current RGB image, masked language context, and
+proprioception; chunk-level GAE replaces group-relative advantage. The actor still trains only
+the rank-64/alpha-128 Recovery LoRA, while base weights and nominal visual Teacher stay frozen.
+
+The direct E5 experiment starts from the released Fast-WAM base, not Stage I. It reuses seed 42,
+the joint-1 periodic-stick Fault, and the disjoint 50/50 training/validation state manifests
+above. **Only** the existing HQ-SAM oracle-box `task_direction` reward is used; success is a
+terminal diagnostic, not an added reward. This Gate-4-override reward is for simulation and is
+**not real-robot deployable**. Unlike old main-10/shadow-32 collection, the Student runs complete
+32-action chunks in one main Fault environment, collecting frames 0,4,...,32. If success occurs
+inside a chunk, collection finishes that chunk for the nine-frame reward before stopping.
+
+The 10-epoch default rotates 48/50 train states per epoch across eight GPUs, at most 16 chunks
+per episode: at most 768 chunks/24,576 control steps per epoch versus the old 800 candidate
+chunks/25,600 shadow steps. Early success may reduce actual experience; use
+`ppo_rollouts_rank_XX.jsonl` to compare actual `control_steps`, not just epoch count. Each chunk
+uses eight CFM Monte Carlo pairs. Parameters: actor LR `1e-6`, critic LR `1e-4`, gamma `0.99`,
+GAE lambda `0.95`, actor clip `0.05`, value coefficient `0.25`, value clip `0.5`, two update
+passes, local minibatch four, max gradient norm `0.1`, and fixed reward calibration
+`(task_direction - 0.14) / 0.04` based on previous E5 reward logs. Raw rewards are also logged.
+
+Use the existing Fast-WAM/LIBERO/HQ-SAM setup and assets above; no new dependency, weight, or
+requirements change is needed. On eight available 48 GB GPUs, with GPU 0 also hosting HQ-SAM:
+
+```bash
+python scripts/resilient/train_outcome_fpo.py \
+  --config-name two_stage_opsd/fastwam_libero10_task7_e5_direct_stage2_task_direction_ppo_10ep \
+  outcome_fpo.validate_only=true
+export LIBERO_CONFIG_PATH="$PWD/AILOG/libero"
+export DIFFSYNTH_MODEL_BASE_PATH="$PWD/checkpoints"
+TRAIN_ENTRYPOINT=train_outcome_fpo.py FASTWAM_ENV="$PWD/.venv" \
+CONFIG_NAME=two_stage_opsd/fastwam_libero10_task7_e5_direct_stage2_task_direction_ppo_10ep \
+TRAIN_PORT=29511 QUEUE_DIR="$PWD/data/.cache/task_decoupling_rpc_samhq_e5_direct_stage2_ppo" \
+LOG_DIR="$PWD/AILOG/processes/e5_direct_stage2_task_direction_ppo_10ep" \
+  bash scripts/resilient/run_task_direction_outcome_fpo.sh 0,1,2,3,4,5,6,7 0
+```
+
+`bash scripts/resilient/run_e5_ppo_experiment.sh` wraps this exact training command and
+automatically launches the task-7/50-state evaluation only after epoch 10 completes.
+
+The ignored output is `runs/two_stage_opsd/libero10_task7_e5_periodic_freeze_seed42/`
+`direct_stage2_task_direction_ppo_10ep/`. Each epoch retains its `recovery_adapter.pt`,
+`value_head.pt`, and resolved configuration; only the newest full optimizer/RNG state is retained.
+`resume=auto` requires that full state and the exact original config. A local symlink from the
+relative `runs/...` path to a larger disk is supported. The value head is not loaded at inference.
+
+Evaluate the completed adapter on only LIBERO-10 task 7 and the unseen 50-state bank; replace the
+epoch directory placeholder with the actual `epoch_XXXX_step_XXXXXXXX` name:
+
+```bash
+EPOCH_DIR=runs/two_stage_opsd/libero10_task7_e5_periodic_freeze_seed42/direct_stage2_task_direction_ppo_10ep/checkpoints/epochs/epoch_0010_step_XXXXXXXX
+CUDA_VISIBLE_DEVICES=0,1,2,3 python experiments/libero/run_libero_manager.py \
+  task=libero_uncond_2cam224_1e-4 ckpt=checkpoints/fastwam_release/libero_uncond_2cam224.pt \
+  MULTIRUN.task_file=configs/evaluation_tasks/libero10_task7.txt MULTIRUN.num_gpus=4 \
+  EVALUATION.num_trials=50 EVALUATION.replan_steps=32 EVALUATION.save_rollout_videos=false \
+  EVALUATION.sigma_shift=5.0 \
+  EVALUATION.fault_config_path=configs/fault/catalog/structure/periodic_joint_freeze.yaml \
+  EVALUATION.initial_state_bank.enabled=true \
+  EVALUATION.initial_state_bank.manifest=data/libero_state_banks/opsd_step500_unseen_v1/validation_manifest.json \
+  EVALUATION.initial_state_bank.training_manifest=data/libero_state_banks/opsd_step500_unseen_v1/training_reference_manifest.json \
+  EVALUATION.opsd_adapter.enabled=true EVALUATION.opsd_adapter.checkpoint="$EPOCH_DIR/recovery_adapter.pt" \
+  EVALUATION.opsd_adapter.training_config=runs/two_stage_opsd/libero10_task7_e5_periodic_freeze_seed42/direct_stage2_task_direction_ppo_10ep/resolved_config.yaml \
+  EVALUATION.output_dir=evaluate_results/two_stage_opsd/libero10_task7_e5_direct_stage2_ppo_epoch10
+```
+
+For a like-for-like policy comparison, reevaluate the old GRPO adapter with
+`EVALUATION.replan_steps=32`; its earlier 10-step SR is not a controlled horizon comparison.
+
 ## Stage-II task-region decoupling audit
 
 The optional task-region path isolates task-object evidence from robot/body motion before it is

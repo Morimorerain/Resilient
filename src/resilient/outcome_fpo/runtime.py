@@ -791,6 +791,14 @@ def _collect_group(
 
 def run_outcome_fpo_training(cfg: DictConfig) -> None:
     """Train a Fault-specialized Recovery LoRA with exactly 4 or 8 ranks."""
+    algorithm = str(cfg.outcome_fpo.get("algorithm", "group_relative_fpo"))
+    if algorithm == "actor_critic_fpo":
+        from .ppo.runtime import run_actor_critic_fpo_training
+
+        run_actor_critic_fpo_training(cfg)
+        return
+    if algorithm != "group_relative_fpo":
+        raise ValueError(f"Unknown outcome_fpo.algorithm: {algorithm}")
     accelerator = Accelerator(mixed_precision=str(cfg.mixed_precision))
     provenance = validate_outcome_fpo_config(cfg, world_size=accelerator.num_processes)
     retention = _checkpoint_retention(cfg)

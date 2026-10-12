@@ -29,7 +29,12 @@ from resilient.outcome_fpo.runtime import (  # noqa: E402
 def main(cfg: DictConfig) -> None:
     """Validate the resolved experiment or launch distributed training."""
     if bool(cfg.outcome_fpo.get("validate_only", False)):
-        print(json.dumps(validate_outcome_fpo_config(cfg), indent=2))
+        if str(cfg.outcome_fpo.get("algorithm", "group_relative_fpo")) == "actor_critic_fpo":
+            from resilient.outcome_fpo.ppo.runtime import validate_actor_critic_fpo_config
+
+            print(json.dumps(validate_actor_critic_fpo_config(cfg), indent=2))
+        else:
+            print(json.dumps(validate_outcome_fpo_config(cfg), indent=2))
         return
     run_outcome_fpo_training(cfg)
 

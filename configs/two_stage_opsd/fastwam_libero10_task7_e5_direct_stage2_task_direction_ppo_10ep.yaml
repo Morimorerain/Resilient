@@ -1,0 +1,41 @@
+# @package _global_
+
+defaults:
+  - /two_stage_opsd/fastwam_libero10_task7_e5_direct_stage2_task_direction_10ep
+  - _self_
+
+# This mode leaves the existing group-relative Stage-II configuration untouched.
+output_dir: runs/two_stage_opsd/libero10_task7_e5_periodic_freeze_seed42/direct_stage2_task_direction_ppo_10ep
+resume: null
+
+two_stage_opsd:
+  distributed:
+    num_processes: 8
+
+outcome_fpo:
+  algorithm: actor_critic_fpo
+  num_epochs: 10
+  rollout:
+    anchor_steps: [0]
+    replan_steps: 32
+  ppo:
+    # Rotate 48 of the 50 training states per epoch for equal eight-rank work.
+    episodes_per_epoch: 48
+    max_chunks_per_episode: 16
+    minibatch_size: 4
+    gamma: 0.99
+    gae_lambda: 0.95
+    value_hidden_dim: 256
+    value_learning_rate: 1.0e-4
+    value_coefficient: 0.25
+    value_clip_range: 0.5
+    # Fixed calibration from prior E5 task-direction reward logs (~0.10–0.18).
+    reward_center: 0.14
+    reward_scale: 0.04
+
+task_decoupling:
+  mask_provider:
+    queue_dir: data/.cache/task_decoupling_rpc_samhq_e5_direct_stage2_ppo
+  artifacts:
+    collection_dir: evaluate_results/task_decoupling/libero10_task7_e5_direct_stage2_ppo
+    output_dir: evaluate_results/task_decoupling/libero10_task7_e5_direct_stage2_ppo_samhq_oracle_box
