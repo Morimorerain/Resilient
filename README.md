@@ -1126,7 +1126,9 @@ passes, local minibatch four, max gradient norm `0.1`, and fixed reward calibrat
 `(task_direction - 0.14) / 0.04` based on previous E5 reward logs. Raw rewards are also logged.
 
 Use the existing Fast-WAM/LIBERO/HQ-SAM setup and assets above; no new dependency, weight, or
-requirements change is needed. On eight available 48 GB GPUs, with GPU 0 also hosting HQ-SAM:
+requirements change is needed. The launcher waits for an atomic HQ-SAM readiness marker before
+starting the eight model ranks, so queued reward requests do not expire during weight loading.
+On eight available 48 GB GPUs, with GPU 0 also hosting HQ-SAM:
 
 ```bash
 python scripts/resilient/train_outcome_fpo.py \

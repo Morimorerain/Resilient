@@ -1042,7 +1042,8 @@ CFM Monte Carlo；actor LR `1e-6`、critic LR `1e-4`、gamma `0.99`、GAE lambda
 `(task_direction - 0.14) / 0.04`，原始奖励也写入日志。
 
 环境、Fast-WAM/LIBERO/HQ-SAM 权重与下载方法沿用上文，不增加 Python 依赖、权重或
-requirements 修改。8 张 48 GB GPU 可用、0 卡同时运行 HQ-SAM 时，先无 CUDA 验证配置，
+requirements 修改。启动器会等待 HQ-SAM 完成权重加载并写入原子就绪标记，再启动训练
+rank，避免奖励请求在加载阶段超时。8 张 48 GB GPU 可用、0 卡同时运行 HQ-SAM 时，先无 CUDA 验证配置，
 然后运行：
 
 ```bash

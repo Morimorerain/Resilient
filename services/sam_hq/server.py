@@ -50,9 +50,7 @@ class SamHqWorker:
             raise ValueError("HQ-SAM checkpoint SHA-256 does not match the pinned asset.")
         installed = importlib.metadata.version("segment-anything-hq")
         if installed != PACKAGE_VERSION:
-            raise ValueError(
-                f"Expected segment-anything-hq {PACKAGE_VERSION}, found {installed}."
-            )
+            raise ValueError(f"Expected segment-anything-hq {PACKAGE_VERSION}, found {installed}.")
         from segment_anything_hq import SamPredictor, sam_model_registry
 
         model = sam_model_registry["vit_h"](checkpoint=str(checkpoint))
@@ -69,9 +67,7 @@ class SamHqWorker:
         """Segment every valid camera/entity/frame box without temporal tracking."""
         shape = videos[0].shape
         camera_count, entity_count, frame_count = boxes_xyxy.shape[:3]
-        masks = np.zeros(
-            (camera_count, entity_count, frame_count, shape[1], shape[2]), dtype=bool
-        )
+        masks = np.zeros((camera_count, entity_count, frame_count, shape[1], shape[2]), dtype=bool)
         scores = np.full((camera_count, entity_count, frame_count), np.nan, dtype=np.float32)
         for camera_index, video in enumerate(videos):
             for frame_index, image in enumerate(video):
@@ -168,12 +164,24 @@ def main() -> None:
     parser.add_argument("--queue-dir", type=Path, required=True)
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--device", default="cuda")
+    parser.add_argument(
+        "--ready-file",
+        type=Path,
+        default=None,
+        help="Optional atomic marker written after checkpoint loading completes.",
+    )
     parser.add_argument("--poll-seconds", type=float, default=0.1)
     parser.add_argument("--once", action="store_true")
     args = parser.parse_args()
     for child in ("requests", "responses"):
         (args.queue_dir / child).mkdir(parents=True, exist_ok=True)
     worker = SamHqWorker(args.checkpoint, device=args.device)
+    if args.ready_file is not None:
+        args.ready_file.parent.mkdir(parents=True, exist_ok=True)
+        _atomic_json(
+            args.ready_file,
+            {"status": "ready", "model_identity": MODEL_IDENTITY, "device": args.device},
+        )
     while True:
         requests = sorted((args.queue_dir / "requests").glob("*.json"))
         if requests:

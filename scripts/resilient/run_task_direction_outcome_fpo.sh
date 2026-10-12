@@ -9,6 +9,7 @@ FASTWAM_ENV="${FASTWAM_ENV:-${PROJECT_ROOT}/AILOG/envs/resilient-fastwam-uv}"
 QUEUE_DIR="${QUEUE_DIR:-${PROJECT_ROOT}/data/.cache/task_decoupling_rpc_samhq}"
 SAM_CHECKPOINT="${SAM_CHECKPOINT:-${PROJECT_ROOT}/checkpoints/sam_hq/sam_hq_vit_h.pth}"
 LOG_DIR="${LOG_DIR:-${PROJECT_ROOT}/AILOG/processes/task_direction_outcome_fpo_epoch1}"
+SAM_READY_FILE="${LOG_DIR}/samhq.ready.json"
 CONFIG_NAME="${CONFIG_NAME:-two_stage_opsd/fastwam_libero10_task7_joint1_half_task_direction}"
 TRAIN_PORT="${TRAIN_PORT:-29500}"
 TRAIN_ENTRYPOINT="${TRAIN_ENTRYPOINT:-train_two_stage_stage2.py}"
@@ -29,6 +30,7 @@ if [[ ! ",${TRAIN_GPUS}," =~ ,${SAM_GPU}, ]]; then
 fi
 
 mkdir -p "${LOG_DIR}" "${QUEUE_DIR}"
+rm -f "${SAM_READY_FILE}"
 SAM_PID=""
 TRAIN_PID=""
 
@@ -54,8 +56,24 @@ cd "${PROJECT_ROOT}"
 setsid env CUDA_VISIBLE_DEVICES="${SAM_GPU}" PYTHONUNBUFFERED=1 \
   "${SAM_ENV}/bin/python" services/sam_hq/server.py \
   --queue-dir "${QUEUE_DIR}" --checkpoint "${SAM_CHECKPOINT}" --device cuda \
+  --ready-file "${SAM_READY_FILE}" \
   > "${LOG_DIR}/samhq.log" 2>&1 &
 SAM_PID=$!
+
+for ((attempt = 0; attempt < 600; attempt++)); do
+  if [[ -f "${SAM_READY_FILE}" ]]; then
+    break
+  fi
+  if ! kill -0 "${SAM_PID}" 2>/dev/null; then
+    echo "HQ-SAM exited before readiness; see ${LOG_DIR}/samhq.log." >&2
+    exit 1
+  fi
+  sleep 1
+done
+if [[ ! -f "${SAM_READY_FILE}" ]]; then
+  echo "HQ-SAM did not become ready within 600 seconds." >&2
+  exit 1
+fi
 
 setsid env CUDA_VISIBLE_DEVICES="${TRAIN_GPUS}" MUJOCO_GL=egl PYTHONUNBUFFERED=1 \
   "${FASTWAM_ENV}/bin/accelerate" launch \
