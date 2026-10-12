@@ -120,7 +120,7 @@ class TrainerChecks(unittest.TestCase):
 
             @staticmethod
             def clip_grad_norm_(parameters, max_norm):
-                return torch.nn.utils.clip_grad_norm_(parameters, max_norm)
+                return float(torch.nn.utils.clip_grad_norm_(parameters, max_norm))
 
         scorer = TinyScorer()
         trainer = ActorCriticFPOTrainer(

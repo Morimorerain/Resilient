@@ -134,7 +134,7 @@ class ActorCriticFPOTrainer(OutcomeFPOTrainer):
                 self.optimizer.step()
                 self.optimizer.zero_grad(set_to_none=True)
                 self.global_step += 1
-                metrics["grad_norm"] += float(grad_norm.detach().float().item())
+                metrics["grad_norm"] += float(grad_norm)
         self.group_index += 1
         denominator = float(active_count * self.update_epochs)
         update_count = self.update_epochs * self.max_chunks_per_episode // self.minibatch_size
