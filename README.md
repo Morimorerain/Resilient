@@ -1127,7 +1127,9 @@ passes, local minibatch four, max gradient norm `0.1`, and fixed reward calibrat
 
 Use the existing Fast-WAM/LIBERO/HQ-SAM setup and assets above; no new dependency, weight, or
 requirements change is needed. The launcher waits for an atomic HQ-SAM readiness marker before
-starting the eight model ranks, so queued reward requests do not expire during weight loading.
+starting the model ranks, so queued reward requests do not expire during weight loading. The
+single HQ-SAM worker serves requests in arrival order; its hashed filenames are not scheduling
+keys. The 300-second per-request timeout remains a failure detector rather than a queue policy.
 On eight available 48 GB GPUs, with GPU 0 also hosting HQ-SAM:
 
 ```bash
@@ -1145,6 +1147,10 @@ LOG_DIR="$PWD/AILOG/processes/e5_direct_stage2_task_direction_ppo_10ep" \
 
 `bash scripts/resilient/run_e5_ppo_experiment.sh` wraps this exact training command and
 automatically launches the task-7/50-state evaluation only after epoch 10 completes.
+For a four-GPU run with the same 48 episodes per epoch and automatic evaluation, use
+`TRAIN_GPUS=0,1,2,3 bash scripts/resilient/run_e5_ppo_experiment.sh`. The launcher forwards a
+matching Hydra process-count override; the training scale, original Fast-WAM starting checkpoint,
+and train/validation state split are unchanged. A four-GPU run is slower than an eight-GPU run.
 
 The ignored output is `runs/two_stage_opsd/libero10_task7_e5_periodic_freeze_seed42/`
 `direct_stage2_task_direction_ppo_10ep/`. Each epoch retains its `recovery_adapter.pt`,

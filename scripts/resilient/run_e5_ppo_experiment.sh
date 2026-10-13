@@ -6,6 +6,8 @@ CONFIG_NAME="two_stage_opsd/fastwam_libero10_task7_e5_direct_stage2_task_directi
 RUN_DIR="runs/two_stage_opsd/libero10_task7_e5_periodic_freeze_seed42/direct_stage2_task_direction_ppo_10ep"
 FASTWAM_ENV="${FASTWAM_ENV:-${PROJECT_ROOT}/.venv}"
 EVAL_GPUS="${EVAL_GPUS:-0,1,2,3}"
+TRAIN_GPUS="${TRAIN_GPUS:-0,1,2,3,4,5,6,7}"
+IFS=',' read -r -a TRAIN_GPU_ARRAY <<< "${TRAIN_GPUS}"
 export LIBERO_CONFIG_PATH="${LIBERO_CONFIG_PATH:-${PROJECT_ROOT}/AILOG/libero}"
 export DIFFSYNTH_MODEL_BASE_PATH="${DIFFSYNTH_MODEL_BASE_PATH:-${PROJECT_ROOT}/checkpoints}"
 export MUJOCO_GL="${MUJOCO_GL:-egl}"
@@ -17,7 +19,9 @@ FASTWAM_ENV="${FASTWAM_ENV}" \
 TRAIN_PORT="${TRAIN_PORT:-29511}" \
 QUEUE_DIR="${QUEUE_DIR:-${PROJECT_ROOT}/data/.cache/task_decoupling_rpc_samhq_e5_direct_stage2_ppo}" \
 LOG_DIR="${LOG_DIR:-${PROJECT_ROOT}/AILOG/processes/e5_direct_stage2_task_direction_ppo_10ep}" \
-  bash scripts/resilient/run_task_direction_outcome_fpo.sh 0,1,2,3,4,5,6,7 0
+  bash scripts/resilient/run_task_direction_outcome_fpo.sh \
+    "${TRAIN_GPUS}" "${TRAIN_GPU_ARRAY[0]}" \
+    "two_stage_opsd.distributed.num_processes=${#TRAIN_GPU_ARRAY[@]}"
 
 shopt -s nullglob
 epoch_dirs=("${RUN_DIR}"/checkpoints/epochs/epoch_0010_step_*)

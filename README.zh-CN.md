@@ -1043,7 +1043,8 @@ CFM Monte Carlo；actor LR `1e-6`、critic LR `1e-4`、gamma `0.99`、GAE lambda
 
 环境、Fast-WAM/LIBERO/HQ-SAM 权重与下载方法沿用上文，不增加 Python 依赖、权重或
 requirements 修改。启动器会等待 HQ-SAM 完成权重加载并写入原子就绪标记，再启动训练
-rank，避免奖励请求在加载阶段超时。8 张 48 GB GPU 可用、0 卡同时运行 HQ-SAM 时，先无 CUDA 验证配置，
+rank，避免奖励请求在加载阶段超时。单个 HQ-SAM worker 按请求到达时间处理，而非按哈希文件名
+排序；300 秒请求超时只用于检测异常，不能代替正确的排队策略。8 张 48 GB GPU 可用、0 卡同时运行 HQ-SAM 时，先无 CUDA 验证配置，
 然后运行：
 
 ```bash
@@ -1061,6 +1062,9 @@ LOG_DIR="$PWD/AILOG/processes/e5_direct_stage2_task_direction_ppo_10ep" \
 
 `bash scripts/resilient/run_e5_ppo_experiment.sh` 会按同一配置训练，并仅在第10轮正常
 完成后自动启动 task 7 的50个未见状态验证。
+仅有4卡时可运行 `TRAIN_GPUS=0,1,2,3 bash scripts/resilient/run_e5_ppo_experiment.sh`；
+启动器会同步覆盖 Hydra 进程数。每轮仍采48个训练状态，原始 Fast-WAM 起点和训练/验证状态划分
+不变，但4卡训练耗时会增加。
 
 Git 忽略的输出目录为 `runs/two_stage_opsd/libero10_task7_e5_periodic_freeze_seed42/`
 `direct_stage2_task_direction_ppo_10ep/`。每轮保留 `recovery_adapter.pt`、

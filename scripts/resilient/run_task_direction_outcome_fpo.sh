@@ -80,7 +80,7 @@ setsid env CUDA_VISIBLE_DEVICES="${TRAIN_GPUS}" MUJOCO_GL=egl PYTHONUNBUFFERED=1
   --config_file scripts/accelerate_configs/accelerate_opsd_zero2_ds.yaml \
   --main_process_port "${TRAIN_PORT}" \
   --num_processes "${#TRAIN_GPU_ARRAY[@]}" "scripts/resilient/${TRAIN_ENTRYPOINT}" \
-  --config-name "${CONFIG_NAME}" \
+  --config-name "${CONFIG_NAME}" "${@:3}" \
   > "${LOG_DIR}/training.log" 2>&1 &
 TRAIN_PID=$!
 

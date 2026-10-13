@@ -159,6 +159,12 @@ def _process_request(worker: SamHqWorker, request_json: Path, queue_dir: Path) -
         (queue_dir / "requests" / f"{token}.npz").unlink(missing_ok=True)
 
 
+def _next_request(queue_dir: Path) -> Path | None:
+    """Serve the oldest request first; content hashes are not arrival-order keys."""
+    requests = (queue_dir / "requests").glob("*.json")
+    return min(requests, key=lambda path: (path.stat().st_mtime_ns, path.name), default=None)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--queue-dir", type=Path, required=True)
@@ -183,9 +189,9 @@ def main() -> None:
             {"status": "ready", "model_identity": MODEL_IDENTITY, "device": args.device},
         )
     while True:
-        requests = sorted((args.queue_dir / "requests").glob("*.json"))
-        if requests:
-            _process_request(worker, requests[0], args.queue_dir)
+        request = _next_request(args.queue_dir)
+        if request is not None:
+            _process_request(worker, request, args.queue_dir)
             if args.once:
                 return
         elif args.once:

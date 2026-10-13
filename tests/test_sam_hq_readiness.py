@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -13,6 +14,19 @@ from services.sam_hq import server
 
 
 class ReadinessChecks(unittest.TestCase):
+    def test_requests_are_served_by_arrival_not_content_hash(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            queue = Path(directory)
+            requests = queue / "requests"
+            requests.mkdir()
+            older = requests / "ffff-older.json"
+            newer = requests / "0000-newer.json"
+            older.write_text("{}", encoding="utf-8")
+            newer.write_text("{}", encoding="utf-8")
+            os.utime(older, ns=(1_000_000_000, 1_000_000_000))
+            os.utime(newer, ns=(2_000_000_000, 2_000_000_000))
+            self.assertEqual(server._next_request(queue), older)
+
     def test_marker_is_written_after_worker_initialization(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
