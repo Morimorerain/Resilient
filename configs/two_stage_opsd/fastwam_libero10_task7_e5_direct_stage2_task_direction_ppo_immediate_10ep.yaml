@@ -17,9 +17,6 @@ outcome_fpo:
     # simply because the visual-similarity proxy remains positive at each step.
     gamma: 0.0
     # Lambda has no effect when gamma is zero; retain its recorded baseline value.
-    gradient_control: separate
-    actor_max_grad_norm: 0.1
-    critic_max_grad_norm: 1.0
 
 task_decoupling:
   mask_provider:

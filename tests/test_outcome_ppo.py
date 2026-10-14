@@ -4,16 +4,13 @@ from __future__ import annotations
 
 import unittest
 from contextlib import nullcontext
-from types import SimpleNamespace
 
 import torch
 import torch.nn as nn
-from accelerate.utils import DistributedType
 from hydra import compose, initialize_config_dir
 
 from resilient.outcome_fpo.ppo.advantage import generalized_advantage_estimate
 from resilient.outcome_fpo.ppo.collector import PPOEpisode, PPOTransition
-from resilient.outcome_fpo.ppo.gradient_control import clip_actor_critic_gradients
 from resilient.outcome_fpo.ppo.model import ConditionValueHead
 from resilient.outcome_fpo.ppo.runtime import validate_actor_critic_fpo_config
 from resilient.outcome_fpo.ppo.trainer import ActorCriticFPOTrainer
@@ -121,65 +118,9 @@ class ConfigChecks(unittest.TestCase):
                 config_name="two_stage_opsd/fastwam_libero10_task7_e5_direct_stage2_task_direction_ppo_immediate_10ep"
             )
         self.assertEqual(cfg.outcome_fpo.ppo.gamma, 0.0)
-        self.assertEqual(cfg.outcome_fpo.ppo.gradient_control, "separate")
         self.assertEqual(cfg.two_stage_opsd.distributed.num_processes, 4)
         self.assertIsNone(cfg.adapter.initial_checkpoint)
         self.assertEqual(validate_actor_critic_fpo_config(cfg)["validation_states"], 50)
-
-
-class GradientControlChecks(unittest.TestCase):
-    def test_non_deepspeed_groups_are_clipped_independently(self) -> None:
-        actor = nn.Parameter(torch.zeros(2))
-        critic = nn.Parameter(torch.zeros(2))
-        actor.grad = torch.tensor([3.0, 4.0])
-        critic.grad = torch.tensor([0.0, 6.0])
-        optimizer = torch.optim.SGD([{"params": [actor]}, {"params": [critic]}], lr=0.1)
-        metrics = clip_actor_critic_gradients(
-            accelerator=SimpleNamespace(distributed_type=DistributedType.NO),
-            optimizer=optimizer,
-            actor_max_norm=1.0,
-            critic_max_norm=2.0,
-        )
-        self.assertAlmostEqual(metrics["actor_grad_norm"], 5.0)
-        self.assertAlmostEqual(metrics["critic_grad_norm"], 6.0)
-        self.assertAlmostEqual(float(actor.grad.norm()), 1.0, places=5)
-        self.assertAlmostEqual(float(critic.grad.norm()), 2.0, places=5)
-
-    def test_zero2_partitioned_groups_are_clipped_independently(self) -> None:
-        actor_gradient = torch.tensor([3.0, 4.0])
-        critic_gradient = torch.tensor([0.0, 6.0])
-
-        class FakeZero2:
-            partition_gradients = True
-            cpu_offload = False
-            loss_scale = 1.0
-            bit16_groups = [[], []]
-            optimizer = SimpleNamespace(param_groups=[{}, {}])
-            averaged_gradients = {0: [actor_gradient], 1: [critic_gradient, torch.zeros(2)]}
-            params_in_partition = {0: [object()], 1: [object()]}
-            partition_size = {0: 2, 1: 4}
-
-            @staticmethod
-            def get_grad_norm_direct(gradients, parameters):
-                return torch.linalg.vector_norm(
-                    torch.cat([gradient for gradient, _ in zip(gradients, parameters)])
-                )
-
-        engine = SimpleNamespace(optimizer=FakeZero2(), gradient_clipping=lambda: 0.0)
-        accelerator = SimpleNamespace(
-            distributed_type=DistributedType.DEEPSPEED,
-            deepspeed_engine_wrapped=SimpleNamespace(engine=engine),
-        )
-        metrics = clip_actor_critic_gradients(
-            accelerator=accelerator,
-            optimizer=None,
-            actor_max_norm=1.0,
-            critic_max_norm=2.0,
-        )
-        self.assertEqual(metrics["actor_grad_clipped"], 1.0)
-        self.assertEqual(metrics["critic_grad_clipped"], 1.0)
-        self.assertAlmostEqual(float(actor_gradient.norm()), 1.0, places=5)
-        self.assertAlmostEqual(float(critic_gradient.norm()), 2.0, places=5)
 
 
 class TrainerChecks(unittest.TestCase):

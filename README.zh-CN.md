@@ -734,7 +734,7 @@ LoRA 覆盖与 Fast-WAM 原训练一致的高层范围：`video_expert`、`actio
 0、bf16 和梯度范数 0.1。
 对于仓库中的旧 ZeRO-2 启动器，这个 0.1 是配置值但未被真正执行：Accelerate 只返回
 DeepSpeed 的梯度范数，而 DeepSpeed JSON 未启用裁剪。解读旧实验 `grad_norm` 日志时应按
-诊断值处理；下文独立 PPO 校准配置才显式进行分组裁剪。
+诊断值处理；下文独立 PPO 校准配置也不改变优化器的这一行为。
 
 代码按职责解耦：
 
@@ -1110,11 +1110,9 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 python experiments/libero/run_libero_manager.py \
 value；此时 `gae_lambda=0.95` 不产生作用。这避免仅因未成功轨迹更长，就持续累加正的视觉
 相似度代理奖励。它没有加入成功或进度奖励，FPO ratio 仍不是精确 PPO log-probability。
 
-`ppo.gradient_control=separate` 对 ZeRO-2 已规约的 actor、critic 优化器组分别以 `0.1`、
-`1.0` 裁剪。更新日志新增裁剪前的 `actor_grad_norm`、`critic_grad_norm` 与两组裁剪比例。
-该模式要求文档中的 ZeRO-2、无 optimizer offload 配置，并保持 DeepSpeed 自带的
-`gradient_clipping` 为 0；`legacy` 模式保留旧 PPO 行为。不增加 Python 依赖或新资产。
-四张 48 GB GPU 可用、HQ-SAM 与第一张卡共享时：
+所有优化器参数和既有 ZeRO-2 更新路径均保持不变，因此这次只隔离“回报如何定义”的变化。
+前述旧模式的梯度范数行为仍然适用；本实验不声称进行了 actor/critic 分组裁剪。没有新增
+Python 依赖或资产。四张 48 GB GPU 可用、HQ-SAM 与第一张卡共享时：
 
 ```bash
 python scripts/resilient/train_outcome_fpo.py \

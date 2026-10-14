@@ -81,13 +81,6 @@ def validate_actor_critic_fpo_config(
         raise ValueError("PPO reward scale must be positive.")
     if not (0 <= float(ppo.gamma) <= 1 and 0 <= float(ppo.gae_lambda) <= 1):
         raise ValueError("PPO gamma and GAE lambda are outside their valid ranges.")
-    gradient_control = str(ppo.get("gradient_control", "legacy"))
-    if gradient_control not in {"legacy", "separate"}:
-        raise ValueError("PPO gradient control must be 'legacy' or 'separate'.")
-    if gradient_control == "separate" and any(
-        float(ppo.get(name, 0.0)) <= 0 for name in ("actor_max_grad_norm", "critic_max_grad_norm")
-    ):
-        raise ValueError("Separate PPO actor and critic gradient limits must be positive.")
     task = cfg.task_decoupling
     if not bool(task.enabled) or str(task.reward.type) != "task_direction":
         raise ValueError("This experiment uses only task-direction reward.")
@@ -203,9 +196,6 @@ def run_actor_critic_fpo_training(cfg: DictConfig) -> None:
         reward_scale=float(ppo.reward_scale),
         value_coefficient=float(ppo.value_coefficient),
         value_clip_range=float(ppo.value_clip_range),
-        gradient_control=str(ppo.get("gradient_control", "legacy")),
-        actor_max_grad_norm=float(ppo.get("actor_max_grad_norm", 0.1)),
-        critic_max_grad_norm=float(ppo.get("critic_max_grad_norm", 1.0)),
     )
     if resume is not None:
         trainer.load_checkpoint(resume, config_hash=provenance["config_sha256"])

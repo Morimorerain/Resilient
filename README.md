@@ -792,8 +792,8 @@ Recovery LoRA is trained over the same high-level scope as Fast-WAM training:
 dropout 0; AdamW uses learning rate `1e-6`, zero weight decay, bf16, and gradient norm 0.1.
 For the bundled legacy ZeRO-2 launcher, this 0.1 value is configured but not enforced:
 Accelerate reports DeepSpeed's gradient norm, while the DeepSpeed JSON leaves actual gradient
-clipping disabled. Interpret legacy `grad_norm` logs accordingly; the separate PPO calibration
-below implements explicit group-wise clipping.
+clipping disabled. Interpret legacy `grad_norm` logs accordingly; the PPO calibration below
+keeps this optimizer behavior unchanged.
 
 The implementation is separated by responsibility:
 
@@ -1200,13 +1200,10 @@ advantage is the current chunk's calibrated reward minus its current-state value
 `gae_lambda=0.95` has no effect at gamma zero. This removes the implicit incentive to accrue a
 positive visual-similarity proxy across many unsuccessful chunks. It does **not** add success or
 progress reward, and it does not turn the approximate FPO ratio into an exact PPO likelihood.
-
-`ppo.gradient_control=separate` independently clips reduced ZeRO-2 actor and critic optimizer
-groups at `0.1` and `1.0`. The update log records pre-clipping `actor_grad_norm`,
-`critic_grad_norm`, and each group's clipping fraction. This mode requires the documented
-ZeRO-2/no-offload DeepSpeed configuration with its built-in `gradient_clipping` left at zero;
-the `legacy` setting preserves the original PPO behavior. No dependency or asset changes are
-needed. On four 48 GB GPUs, with HQ-SAM sharing the first GPU:
+All optimizer settings and the existing ZeRO-2 update path remain unchanged, so this experiment
+isolates the return-definition change. In particular, the legacy gradient norm behavior described
+above still applies; this experiment does not claim separate actor/critic clipping. No dependency
+or asset changes are needed. On four 48 GB GPUs, with HQ-SAM sharing the first GPU:
 
 ```bash
 python scripts/resilient/train_outcome_fpo.py \
