@@ -1040,6 +1040,9 @@ CFM Monte Carlo；actor LR `1e-6`、critic LR `1e-4`、gamma `0.99`、GAE lambda
 截断系数 `0.05`、value loss 系数 `0.25`、value 截断 `0.5`、两轮更新、每卡 minibatch 4、
 梯度范数上限 `0.1`。依据之前 E5 奖励日志固定归一化为
 `(task_direction - 0.14) / 0.04`，原始奖励也写入日志。
+需要注意：旧 ZeRO-2 实验中的 `max_grad_norm=0.1` 虽被记录，Accelerate 在 DeepSpeed 模式下
+只读取梯度范数；现有 DeepSpeed JSON 未启用真正的裁剪。因此旧日志的这个值是诊断值，不能
+解释为已经执行了 0.1 裁剪。
 
 环境、Fast-WAM/LIBERO/HQ-SAM 权重与下载方法沿用上文，不增加 Python 依赖、权重或
 requirements 修改。启动器会等待 HQ-SAM 完成权重加载并写入原子就绪标记，再启动训练
@@ -1094,6 +1097,40 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 python experiments/libero/run_libero_manager.py \
 ```
 
 先前PPO的32步测评结果独立保留，不能直接与已有的10步Fast-WAM或组内相对FPO成功率比较。
+
+#### E5 PPO 单动作块结果校准实验
+
+可选的 `ppo_immediate_10ep` 配置是独立实验，不改变上面的旧 PPO 或 GRPO 默认行为。
+它保持 Fast-WAM 发布权重起点、E5 Fault、仅 HQ-SAM task-direction 奖励、互斥的训练/验证
+各 50 状态、每轮轮换 48 个训练 episode、训练时执行完整 32 步动作块、相同 LoRA 和 10 轮
+训练。此配置设 `ppo.gamma=0.0`，使 advantage 只比较当前动作块的标准化奖励与当前状态
+value；此时 `gae_lambda=0.95` 不产生作用。这避免仅因未成功轨迹更长，就持续累加正的视觉
+相似度代理奖励。它没有加入成功或进度奖励，FPO ratio 仍不是精确 PPO log-probability。
+
+`ppo.gradient_control=separate` 对 ZeRO-2 已规约的 actor、critic 优化器组分别以 `0.1`、
+`1.0` 裁剪。更新日志新增裁剪前的 `actor_grad_norm`、`critic_grad_norm` 与两组裁剪比例。
+该模式要求文档中的 ZeRO-2、无 optimizer offload 配置，并保持 DeepSpeed 自带的
+`gradient_clipping` 为 0；`legacy` 模式保留旧 PPO 行为。不增加 Python 依赖或新资产。
+四张 48 GB GPU 可用、HQ-SAM 与第一张卡共享时：
+
+```bash
+python scripts/resilient/train_outcome_fpo.py \
+  --config-name two_stage_opsd/fastwam_libero10_task7_e5_direct_stage2_task_direction_ppo_immediate_10ep \
+  outcome_fpo.validate_only=true
+export LIBERO_CONFIG_PATH="$PWD/AILOG/libero"
+export DIFFSYNTH_MODEL_BASE_PATH="$PWD/checkpoints"
+TRAIN_ENTRYPOINT=train_outcome_fpo.py FASTWAM_ENV="$PWD/.venv" \
+CONFIG_NAME=two_stage_opsd/fastwam_libero10_task7_e5_direct_stage2_task_direction_ppo_immediate_10ep \
+TRAIN_PORT=29521 QUEUE_DIR="$PWD/data/.cache/task_decoupling_rpc_samhq_e5_ppo_immediate" \
+LOG_DIR="$PWD/AILOG/processes/e5_ppo_immediate_10ep" \
+  bash scripts/resilient/run_task_direction_outcome_fpo.sh 0,1,2,3 0
+```
+
+Git 忽略的运行目录是 `runs/two_stage_opsd/libero10_task7_e5_periodic_freeze_seed42/`
+`direct_stage2_task_direction_ppo_immediate_10ep/`。每轮保留 actor adapter 和 critic head，
+仅最新轮保留完整优化器/RNG 续训状态。验证时复用上一节命令，同时将 adapter、训练配置路径
+改为本轮目录，并指定不同的输出目录；与 GRPO 对比时必须使用同一组 50 个未见状态、10 步
+重规划，同时记录实际采到的 chunk 数，不仅比较 epoch 数。
 
 ## Stage II 任务区域解耦审计
 

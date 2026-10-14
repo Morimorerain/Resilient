@@ -1124,6 +1124,9 @@ uses eight CFM Monte Carlo pairs. Parameters: actor LR `1e-6`, critic LR `1e-4`,
 GAE lambda `0.95`, actor clip `0.05`, value coefficient `0.25`, value clip `0.5`, two update
 passes, local minibatch four, max gradient norm `0.1`, and fixed reward calibration
 `(task_direction - 0.14) / 0.04` based on previous E5 reward logs. Raw rewards are also logged.
+In this legacy ZeRO-2 run, `max_grad_norm=0.1` is recorded but Accelerate only reads the
+DeepSpeed norm; the existing DeepSpeed JSON does not actually clip it. Treat it as a diagnostic,
+not as applied clipping.
 
 Use the existing Fast-WAM/LIBERO/HQ-SAM setup and assets above; no new dependency, weight, or
 requirements change is needed. The launcher waits for an atomic HQ-SAM readiness marker before
@@ -1182,6 +1185,44 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 python experiments/libero/run_libero_manager.py \
 
 The prior 32-step PPO evaluation is retained separately and must not be compared directly with
 the established 10-step Fast-WAM or group-relative FPO success rates.
+
+#### E5 PPO immediate-outcome calibration
+
+The optional `ppo_immediate_10ep` config is a separate experiment, not a change to the preceding
+PPO or GRPO defaults. It retains the released Fast-WAM starting weights, E5 Fault, HQ-SAM
+task-direction-only reward, 50-state disjoint split, 48 rotated training episodes per epoch,
+32-step training chunks, LoRA layout, and 10-epoch limit. It sets `ppo.gamma=0.0`, so each
+advantage is the current chunk's calibrated reward minus its current-state value estimate;
+`gae_lambda=0.95` has no effect at gamma zero. This removes the implicit incentive to accrue a
+positive visual-similarity proxy across many unsuccessful chunks. It does **not** add success or
+progress reward, and it does not turn the approximate FPO ratio into an exact PPO likelihood.
+
+`ppo.gradient_control=separate` independently clips reduced ZeRO-2 actor and critic optimizer
+groups at `0.1` and `1.0`. The update log records pre-clipping `actor_grad_norm`,
+`critic_grad_norm`, and each group's clipping fraction. This mode requires the documented
+ZeRO-2/no-offload DeepSpeed configuration with its built-in `gradient_clipping` left at zero;
+the `legacy` setting preserves the original PPO behavior. No dependency or asset changes are
+needed. On four 48 GB GPUs, with HQ-SAM sharing the first GPU:
+
+```bash
+python scripts/resilient/train_outcome_fpo.py \
+  --config-name two_stage_opsd/fastwam_libero10_task7_e5_direct_stage2_task_direction_ppo_immediate_10ep \
+  outcome_fpo.validate_only=true
+export LIBERO_CONFIG_PATH="$PWD/AILOG/libero"
+export DIFFSYNTH_MODEL_BASE_PATH="$PWD/checkpoints"
+TRAIN_ENTRYPOINT=train_outcome_fpo.py FASTWAM_ENV="$PWD/.venv" \
+CONFIG_NAME=two_stage_opsd/fastwam_libero10_task7_e5_direct_stage2_task_direction_ppo_immediate_10ep \
+TRAIN_PORT=29521 QUEUE_DIR="$PWD/data/.cache/task_decoupling_rpc_samhq_e5_ppo_immediate" \
+LOG_DIR="$PWD/AILOG/processes/e5_ppo_immediate_10ep" \
+  bash scripts/resilient/run_task_direction_outcome_fpo.sh 0,1,2,3 0
+```
+
+The ignored run directory is `runs/two_stage_opsd/libero10_task7_e5_periodic_freeze_seed42/`
+`direct_stage2_task_direction_ppo_immediate_10ep/`. Each epoch keeps its actor adapter and critic
+head; only the newest epoch keeps full optimizer/RNG resume state. Evaluate any epoch with the
+preceding evaluation command after changing both adapter and training-config paths to this run,
+and choose a distinct output directory. Use the same 50 unseen states and 10-step replanning
+when comparing against GRPO; compare actual collected chunks as well as epoch counts.
 
 ## Stage-II task-region decoupling audit
 

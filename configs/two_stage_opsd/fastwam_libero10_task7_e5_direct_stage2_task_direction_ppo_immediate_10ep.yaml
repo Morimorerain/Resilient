@@ -1,0 +1,29 @@
+# @package _global_
+
+defaults:
+  - /two_stage_opsd/fastwam_libero10_task7_e5_direct_stage2_task_direction_ppo_10ep
+  - _self_
+
+# Isolated PPO calibration: same base, Fault, reward, state split, and rollout budget.
+output_dir: runs/two_stage_opsd/libero10_task7_e5_periodic_freeze_seed42/direct_stage2_task_direction_ppo_immediate_10ep
+
+two_stage_opsd:
+  distributed:
+    num_processes: 4
+
+outcome_fpo:
+  ppo:
+    # Immediate chunk outcome avoids rewarding a long unsuccessful trajectory
+    # simply because the visual-similarity proxy remains positive at each step.
+    gamma: 0.0
+    # Lambda has no effect when gamma is zero; retain its recorded baseline value.
+    gradient_control: separate
+    actor_max_grad_norm: 0.1
+    critic_max_grad_norm: 1.0
+
+task_decoupling:
+  mask_provider:
+    queue_dir: data/.cache/task_decoupling_rpc_samhq_e5_ppo_immediate
+  artifacts:
+    collection_dir: evaluate_results/task_decoupling/libero10_task7_e5_ppo_immediate
+    output_dir: evaluate_results/task_decoupling/libero10_task7_e5_ppo_immediate_samhq_oracle_box

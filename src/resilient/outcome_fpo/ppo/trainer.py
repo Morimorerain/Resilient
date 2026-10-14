@@ -10,6 +10,7 @@ from ..objective import compute_fpo_ratio, fpo_clipped_objective
 from ..trainer import OutcomeFPOTrainer
 from .advantage import generalized_advantage_estimate
 from .collector import PPOEpisode
+from .gradient_control import clip_actor_critic_gradients
 
 
 class ActorCriticFPOTrainer(OutcomeFPOTrainer):
@@ -26,6 +27,9 @@ class ActorCriticFPOTrainer(OutcomeFPOTrainer):
         reward_scale: float,
         value_coefficient: float,
         value_clip_range: float,
+        gradient_control: str = "legacy",
+        actor_max_grad_norm: float = 0.1,
+        critic_max_grad_norm: float = 1.0,
         **kwargs,
     ) -> None:
         super().__init__(minimum_reward_std=0.0, **kwargs)
@@ -37,10 +41,15 @@ class ActorCriticFPOTrainer(OutcomeFPOTrainer):
         self.reward_scale = float(reward_scale)
         self.value_coefficient = float(value_coefficient)
         self.value_clip_range = float(value_clip_range)
+        self.gradient_control = str(gradient_control)
+        self.actor_max_grad_norm = float(actor_max_grad_norm)
+        self.critic_max_grad_norm = float(critic_max_grad_norm)
         if self.max_chunks_per_episode % self.minibatch_size:
             raise ValueError("max_chunks_per_episode must divide by minibatch_size.")
         if self.reward_scale <= 0 or self.value_coefficient < 0 or self.value_clip_range <= 0:
             raise ValueError("Invalid reward scale, value coefficient, or value clip range.")
+        if self.gradient_control not in {"legacy", "separate"}:
+            raise ValueError("PPO gradient control must be 'legacy' or 'separate'.")
 
     def train_episode(self, episode: PPOEpisode) -> dict[str, float]:
         """Pad only optimizer work, never simulator experience, across uneven terminal episodes."""
@@ -72,6 +81,13 @@ class ActorCriticFPOTrainer(OutcomeFPOTrainer):
             "approx_kl": 0.0,
             "grad_norm": 0.0,
         }
+        if self.gradient_control == "separate":
+            metrics.update(
+                actor_grad_norm=0.0,
+                critic_grad_norm=0.0,
+                actor_grad_clipped=0.0,
+                critic_grad_clipped=0.0,
+            )
         self.scoring_model.train()
         # Every rank executes the same number of forwards/optimizer steps under DDP.
         # Padded indices repeat a real input but contribute exactly zero loss.
@@ -128,9 +144,23 @@ class ActorCriticFPOTrainer(OutcomeFPOTrainer):
                         metrics["approx_kl"] += float(
                             ((ratio.detach() - 1.0) - log_ratio.detach()).mean().item()
                         )
-                grad_norm = self.accelerator.clip_grad_norm_(
-                    self.scoring_model.parameters(), self.max_grad_norm
-                )
+                if self.gradient_control == "separate":
+                    gradient_metrics = clip_actor_critic_gradients(
+                        accelerator=self.accelerator,
+                        optimizer=self.optimizer,
+                        actor_max_norm=self.actor_max_grad_norm,
+                        critic_max_norm=self.critic_max_grad_norm,
+                    )
+                    for name, value in gradient_metrics.items():
+                        metrics[name] += value
+                    grad_norm = (
+                        gradient_metrics["actor_grad_norm"] ** 2
+                        + gradient_metrics["critic_grad_norm"] ** 2
+                    ) ** 0.5
+                else:
+                    grad_norm = self.accelerator.clip_grad_norm_(
+                        self.scoring_model.parameters(), self.max_grad_norm
+                    )
                 self.optimizer.step()
                 self.optimizer.zero_grad(set_to_none=True)
                 self.global_step += 1
@@ -140,7 +170,12 @@ class ActorCriticFPOTrainer(OutcomeFPOTrainer):
         update_count = self.update_epochs * self.max_chunks_per_episode // self.minibatch_size
         return {
             **{
-                name: value / (float(update_count) if name == "grad_norm" else denominator)
+                name: value
+                / (
+                    float(update_count)
+                    if name == "grad_norm" or name.endswith(("grad_norm", "grad_clipped"))
+                    else denominator
+                )
                 for name, value in metrics.items()
             },
             "reward_mean": float(rewards.mean().item()),
