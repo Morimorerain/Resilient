@@ -732,6 +732,9 @@ probability。对每个最终动作 `A`，独立采样 8 组可复现的连续 a
 LoRA 覆盖与 Fast-WAM 原训练一致的高层范围：`video_expert`、`action_expert` 和
 `proprio_encoder`。默认 rank 64、alpha 128、dropout 0；AdamW 使用学习率 `1e-6`、weight decay
 0、bf16 和梯度范数 0.1。
+对于仓库中的旧 ZeRO-2 启动器，这个 0.1 是配置值但未被真正执行：Accelerate 只返回
+DeepSpeed 的梯度范数，而 DeepSpeed JSON 未启用裁剪。解读旧实验 `grad_norm` 日志时应按
+诊断值处理；下文独立 PPO 校准配置才显式进行分组裁剪。
 
 代码按职责解耦：
 

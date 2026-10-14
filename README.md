@@ -790,6 +790,10 @@ for two FPO update epochs. The frozen checkpoint, VAE, and text encoder never up
 Recovery LoRA is trained over the same high-level scope as Fast-WAM training:
 `video_expert`, `action_expert`, and `proprio_encoder`. The default adapter is rank 64, alpha 128,
 dropout 0; AdamW uses learning rate `1e-6`, zero weight decay, bf16, and gradient norm 0.1.
+For the bundled legacy ZeRO-2 launcher, this 0.1 value is configured but not enforced:
+Accelerate reports DeepSpeed's gradient norm, while the DeepSpeed JSON leaves actual gradient
+clipping disabled. Interpret legacy `grad_norm` logs accordingly; the separate PPO calibration
+below implements explicit group-wise clipping.
 
 The implementation is separated by responsibility:
 
