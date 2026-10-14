@@ -155,12 +155,15 @@ class GradientControlChecks(unittest.TestCase):
             loss_scale = 1.0
             bit16_groups = [[], []]
             optimizer = SimpleNamespace(param_groups=[{}, {}])
-            averaged_gradients = {0: [actor_gradient], 1: [critic_gradient]}
+            averaged_gradients = {0: [actor_gradient], 1: [critic_gradient, torch.zeros(2)]}
             params_in_partition = {0: [object()], 1: [object()]}
+            partition_size = {0: 2, 1: 4}
 
             @staticmethod
-            def get_grad_norm_direct(gradients, _parameters):
-                return torch.linalg.vector_norm(torch.cat(gradients))
+            def get_grad_norm_direct(gradients, parameters):
+                return torch.linalg.vector_norm(
+                    torch.cat([gradient for gradient, _ in zip(gradients, parameters)])
+                )
 
         engine = SimpleNamespace(optimizer=FakeZero2(), gradient_clipping=lambda: 0.0)
         accelerator = SimpleNamespace(

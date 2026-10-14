@@ -42,8 +42,17 @@ def clip_actor_critic_gradients(
         for index, limit in enumerate(limits):
             gradients = zero.averaged_gradients[index]
             parameters = zero.params_in_partition[index]
-            if gradients is None or len(gradients) != len(parameters):
-                raise RuntimeError("ZeRO-2 reduced gradients do not match the PPO parameter group.")
+            # DeepSpeed may append one zero-padding tensor to fill the last
+            # partition, including when this rank owns no parameter in a group.
+            if (
+                gradients is None
+                or len(gradients) not in {len(parameters), len(parameters) + 1}
+                or sum(gradient.numel() for gradient in gradients)
+                != int(zero.partition_size[index])
+            ):
+                raise RuntimeError("Unexpected ZeRO-2 reduced gradient partition layout.")
+            if len(gradients) > len(parameters) and torch.count_nonzero(gradients[-1]):
+                raise RuntimeError("The additional ZeRO-2 partition tensor is not zero padding.")
             scaled_norm = zero.get_grad_norm_direct(gradients, parameters)
             norm = float(scaled_norm) / float(zero.loss_scale)
             if not math.isfinite(norm):
