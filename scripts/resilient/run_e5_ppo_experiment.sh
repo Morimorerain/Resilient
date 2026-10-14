@@ -44,6 +44,7 @@ CUDA_VISIBLE_DEVICES="${EVAL_GPUS}" "${FASTWAM_ENV}/bin/python" \
   EVALUATION.num_trials=50 \
   EVALUATION.replan_steps=32 \
   EVALUATION.sigma_shift=5.0 \
+  EVALUATION.dataset_stats_path=checkpoints/fastwam_release/libero_uncond_2cam224_dataset_stats.json \
   EVALUATION.save_rollout_videos=false \
   EVALUATION.fault_config_path=configs/fault/catalog/structure/periodic_joint_freeze.yaml \
   EVALUATION.initial_state_bank.enabled=true \

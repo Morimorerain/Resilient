@@ -1082,6 +1082,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 python experiments/libero/run_libero_manager.py \
   MULTIRUN.task_file=configs/evaluation_tasks/libero10_task7.txt MULTIRUN.num_gpus=4 \
   EVALUATION.num_trials=50 EVALUATION.replan_steps=32 EVALUATION.save_rollout_videos=false \
   EVALUATION.sigma_shift=5.0 \
+  EVALUATION.dataset_stats_path=checkpoints/fastwam_release/libero_uncond_2cam224_dataset_stats.json \
   EVALUATION.fault_config_path=configs/fault/catalog/structure/periodic_joint_freeze.yaml \
   EVALUATION.initial_state_bank.enabled=true \
   EVALUATION.initial_state_bank.manifest=data/libero_state_banks/opsd_step500_unseen_v1/validation_manifest.json \
