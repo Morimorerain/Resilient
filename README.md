@@ -1146,7 +1146,9 @@ LOG_DIR="$PWD/AILOG/processes/e5_direct_stage2_task_direction_ppo_10ep" \
 ```
 
 `bash scripts/resilient/run_e5_ppo_experiment.sh` wraps this exact training command and
-automatically launches the task-7/50-state evaluation only after epoch 10 completes.
+automatically launches the task-7/50-state evaluation only after epoch 10 completes. Training
+executes complete 32-action chunks; evaluation uses the established 10-step replanning protocol
+for comparison with the E5 Fast-WAM and group-relative FPO results.
 For a four-GPU run with the same 48 episodes per epoch and automatic evaluation, use
 `TRAIN_GPUS=0,1,2,3 bash scripts/resilient/run_e5_ppo_experiment.sh`. The launcher forwards a
 matching Hydra process-count override; the training scale, original Fast-WAM starting checkpoint,
@@ -1166,7 +1168,7 @@ EPOCH_DIR=runs/two_stage_opsd/libero10_task7_e5_periodic_freeze_seed42/direct_st
 CUDA_VISIBLE_DEVICES=0,1,2,3 python experiments/libero/run_libero_manager.py \
   task=libero_uncond_2cam224_1e-4 ckpt=checkpoints/fastwam_release/libero_uncond_2cam224.pt \
   MULTIRUN.task_file=configs/evaluation_tasks/libero10_task7.txt MULTIRUN.num_gpus=4 \
-  EVALUATION.num_trials=50 EVALUATION.replan_steps=32 EVALUATION.save_rollout_videos=false \
+  EVALUATION.num_trials=50 EVALUATION.replan_steps=10 EVALUATION.save_rollout_videos=true \
   EVALUATION.sigma_shift=5.0 \
   EVALUATION.dataset_stats_path=checkpoints/fastwam_release/libero_uncond_2cam224_dataset_stats.json \
   EVALUATION.fault_config_path=configs/fault/catalog/structure/periodic_joint_freeze.yaml \
@@ -1175,11 +1177,11 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 python experiments/libero/run_libero_manager.py \
   EVALUATION.initial_state_bank.training_manifest=data/libero_state_banks/opsd_step500_unseen_v1/training_reference_manifest.json \
   EVALUATION.opsd_adapter.enabled=true EVALUATION.opsd_adapter.checkpoint="$EPOCH_DIR/recovery_adapter.pt" \
   EVALUATION.opsd_adapter.training_config=runs/two_stage_opsd/libero10_task7_e5_periodic_freeze_seed42/direct_stage2_task_direction_ppo_10ep/resolved_config.yaml \
-  EVALUATION.output_dir=evaluate_results/two_stage_opsd/libero10_task7_e5_direct_stage2_ppo_epoch10
+  EVALUATION.output_dir=evaluate_results/two_stage_opsd/libero10_task7_e5_direct_stage2_ppo_epoch10_replan10
 ```
 
-For a like-for-like policy comparison, reevaluate the old GRPO adapter with
-`EVALUATION.replan_steps=32`; its earlier 10-step SR is not a controlled horizon comparison.
+The prior 32-step PPO evaluation is retained separately and must not be compared directly with
+the established 10-step Fast-WAM or group-relative FPO success rates.
 
 ## Stage-II task-region decoupling audit
 

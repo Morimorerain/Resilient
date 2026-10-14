@@ -1061,7 +1061,8 @@ LOG_DIR="$PWD/AILOG/processes/e5_direct_stage2_task_direction_ppo_10ep" \
 ```
 
 `bash scripts/resilient/run_e5_ppo_experiment.sh` 会按同一配置训练，并仅在第10轮正常
-完成后自动启动 task 7 的50个未见状态验证。
+完成后自动启动 task 7 的50个未见状态验证。训练时完整执行32步动作块；测评改用已有的
+10步重规划规范，以便与E5原始Fast-WAM及组内相对FPO结果比较。
 仅有4卡时可运行 `TRAIN_GPUS=0,1,2,3 bash scripts/resilient/run_e5_ppo_experiment.sh`；
 启动器会同步覆盖 Hydra 进程数。每轮仍采48个训练状态，原始 Fast-WAM 起点和训练/验证状态划分
 不变，但4卡训练耗时会增加。
@@ -1080,7 +1081,7 @@ EPOCH_DIR=runs/two_stage_opsd/libero10_task7_e5_periodic_freeze_seed42/direct_st
 CUDA_VISIBLE_DEVICES=0,1,2,3 python experiments/libero/run_libero_manager.py \
   task=libero_uncond_2cam224_1e-4 ckpt=checkpoints/fastwam_release/libero_uncond_2cam224.pt \
   MULTIRUN.task_file=configs/evaluation_tasks/libero10_task7.txt MULTIRUN.num_gpus=4 \
-  EVALUATION.num_trials=50 EVALUATION.replan_steps=32 EVALUATION.save_rollout_videos=false \
+  EVALUATION.num_trials=50 EVALUATION.replan_steps=10 EVALUATION.save_rollout_videos=true \
   EVALUATION.sigma_shift=5.0 \
   EVALUATION.dataset_stats_path=checkpoints/fastwam_release/libero_uncond_2cam224_dataset_stats.json \
   EVALUATION.fault_config_path=configs/fault/catalog/structure/periodic_joint_freeze.yaml \
@@ -1089,11 +1090,10 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 python experiments/libero/run_libero_manager.py \
   EVALUATION.initial_state_bank.training_manifest=data/libero_state_banks/opsd_step500_unseen_v1/training_reference_manifest.json \
   EVALUATION.opsd_adapter.enabled=true EVALUATION.opsd_adapter.checkpoint="$EPOCH_DIR/recovery_adapter.pt" \
   EVALUATION.opsd_adapter.training_config=runs/two_stage_opsd/libero10_task7_e5_periodic_freeze_seed42/direct_stage2_task_direction_ppo_10ep/resolved_config.yaml \
-  EVALUATION.output_dir=evaluate_results/two_stage_opsd/libero10_task7_e5_direct_stage2_ppo_epoch10
+  EVALUATION.output_dir=evaluate_results/two_stage_opsd/libero10_task7_e5_direct_stage2_ppo_epoch10_replan10
 ```
 
-要严格比较旧 GRPO，须用同样 `EVALUATION.replan_steps=32` 重新验证其 adapter；先前
-10 步控制周期的 SR 并不是控制条件一致的对照。
+先前PPO的32步测评结果独立保留，不能直接与已有的10步Fast-WAM或组内相对FPO成功率比较。
 
 ## Stage II 任务区域解耦审计
 
