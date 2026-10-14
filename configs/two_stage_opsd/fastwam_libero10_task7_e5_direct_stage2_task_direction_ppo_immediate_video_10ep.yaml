@@ -1,0 +1,19 @@
+# @package _global_
+
+defaults:
+  - /two_stage_opsd/fastwam_libero10_task7_e5_direct_stage2_task_direction_ppo_immediate_10ep
+  - _self_
+
+output_dir: runs/two_stage_opsd/libero10_task7_e5_periodic_freeze_seed42/direct_stage2_task_direction_ppo_immediate_video_10ep
+
+outcome_fpo:
+  ppo:
+    video_aux:
+      enabled: true
+      weight: 0.001
+      update_epochs: 1
+      checkpoint_blocks: true
+
+task_decoupling:
+  mask_provider:
+    queue_dir: data/.cache/task_decoupling_rpc_samhq_e5_ppo_immediate_video

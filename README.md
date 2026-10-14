@@ -1225,6 +1225,72 @@ preceding evaluation command after changing both adapter and training-config pat
 and choose a distinct output directory. Use the same 50 unseen states and 10-step replanning
 when comparing against GRPO; compare actual collected chunks as well as epoch counts.
 
+#### Optional synchronized real-video supervision for PPO Stage II
+
+`fastwam_libero10_task7_e5_direct_stage2_task_direction_ppo_immediate_video_10ep`
+inherits the immediate-outcome PPO experiment and enables `outcome_fpo.ppo.video_aux`.
+The switch is absent/disabled in every existing PPO and group-relative FPO configuration;
+those runs retain their original loss and sampling behavior. Each main-environment E5 rollout
+already provides nine aligned, unblurred camera frames at action steps `0,4,...,32`. The frozen
+Fast-WAM VAE encodes them for the task-direction reward. Training reuses that **full real video**
+latent (not the locally blurred counterfactual latent), detached on CPU until its update.
+No raw video dataset or additional weight is required.
+
+For each valid action chunk, the actor/critic objective and one auxiliary video objective are
+backpropagated sequentially before the same optimizer step. The latter uses Fast-WAM's shifted
+video-flow scheduler (shift `5`), noisy real latent, `noise - real_latent` target, fixed current
+latent slice, scheduler timestep weight, and MSE on **future latent slices only**. It does not
+call the full native `training_loss()` and therefore adds **no action imitation loss**. The
+nominal reward Teacher, VAE, text encoder, and Fast-WAM base remain frozen; only the existing
+Recovery LoRA and PPO training-only critic are optimized. The reward itself remains
+`task_direction` only. The full video target is used once per valid chunk in the first of the
+two PPO update passes (`video_aux.update_epochs: 1`); both passes keep their original actor and
+critic updates. Padded slots have zero objective, while matching forward/backward counts across
+distributed ranks. `ppo_updates_rank_XX.jsonl` records the unweighted `video_loss` and the
+configured `video_aux_weight`.
+
+The initial `video_aux.weight: 0.001` is a **short-probe-calibrated starting value**, not a
+validated optimum. In four real E5 chunks with a newly initialized critic and no optimizer
+updates, unweighted Video-LoRA gradient norms were about
+`0.20`, `0.27`, `0.27`, and `3.87`, versus reward-actor Video-LoRA norms of about `0.0081`,
+`0.0113`, `0.0092`, and `0.0047`. Thus `0.02` could make one video gradient about 16 times its
+reward counterpart, while `0.001` makes it about 0.83 times in that observed spike and about
+2–3% in the other chunks. This tiny sample does not establish the best task-success weight or
+bound future spikes. Set `video_aux.weight` to another positive number to compare alternatives;
+`enabled: false` restores the original PPO path. `checkpoint_blocks: true` trades compute time for lower
+activation memory in the nine-frame Video DiT. Before a full run, verify one-sample and
+distributed peak memory, finite losses, nonzero Video LoRA gradients, and numerical agreement
+of checkpointed/non-checkpointed video forwards. GPU 0 previously approached 43/48 GiB while
+hosting HQ-SAM, so available VRAM must be checked rather than assumed. This auxiliary target
+models the on-policy Fault-video distribution: the released Video DiT has
+`action_conditioned=false`, so it is **not** a predictor conditioned on each candidate action.
+Lower video loss alone does not establish improved task success.
+
+Use the existing environment and asset instructions. For a 4- or 8-GPU training run, select
+only GPUs actually available to you, provide a distinct HQ-SAM queue/log directory, and run:
+
+```bash
+python scripts/resilient/train_outcome_fpo.py \
+  --config-name two_stage_opsd/fastwam_libero10_task7_e5_direct_stage2_task_direction_ppo_immediate_video_10ep \
+  outcome_fpo.validate_only=true
+export LIBERO_CONFIG_PATH="$PWD/AILOG/libero"
+export DIFFSYNTH_MODEL_BASE_PATH="$PWD/checkpoints"
+TRAIN_ENTRYPOINT=train_outcome_fpo.py FASTWAM_ENV="$PWD/AILOG/envs/resilient-fastwam-uv" \
+CONFIG_NAME=two_stage_opsd/fastwam_libero10_task7_e5_direct_stage2_task_direction_ppo_immediate_video_10ep \
+TRAIN_PORT=29531 QUEUE_DIR="$PWD/data/.cache/task_decoupling_rpc_samhq_e5_ppo_video" \
+LOG_DIR="$PWD/AILOG/processes/e5_ppo_video_10ep" \
+  bash scripts/resilient/run_task_direction_outcome_fpo.sh 0,1,2,3 0
+```
+
+The example uses GPUs `0,1,2,3` only as placeholders; change the list and HQ-SAM GPU together.
+The ignored output is under `runs/two_stage_opsd/libero10_task7_e5_periodic_freeze_seed42/`
+`direct_stage2_task_direction_ppo_immediate_video_10ep/`. Compare with the immediate PPO
+baseline from the same released base checkpoint, E5, state split, 48 episodes/epoch, seeds and
+training horizon. Evaluate both on the same 50 unseen states with **10-step replanning**;
+record actual chunks, PPO ratio/clip fraction, peak VRAM, video loss, and success rate. The
+existing ZeRO-2 gradient-norm diagnostic caveat above still applies. No dependency or asset
+manifest changes are needed.
+
 ## Stage-II task-region decoupling audit
 
 The optional task-region path isolates task-object evidence from robot/body motion before it is

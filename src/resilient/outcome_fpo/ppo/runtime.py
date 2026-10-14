@@ -81,6 +81,14 @@ def validate_actor_critic_fpo_config(
         raise ValueError("PPO reward scale must be positive.")
     if not (0 <= float(ppo.gamma) <= 1 and 0 <= float(ppo.gae_lambda) <= 1):
         raise ValueError("PPO gamma and GAE lambda are outside their valid ranges.")
+    video_aux = ppo.get("video_aux", {})
+    video_enabled = bool(video_aux.get("enabled", False))
+    video_weight = float(video_aux.get("weight", 0.0))
+    video_epochs = int(video_aux.get("update_epochs", 1))
+    if video_enabled and video_weight <= 0:
+        raise ValueError("Enabled video supervision requires a positive weight.")
+    if video_weight < 0 or not 1 <= video_epochs <= int(section.fpo.update_epochs):
+        raise ValueError("Invalid video supervision weight or update epochs.")
     task = cfg.task_decoupling
     if not bool(task.enabled) or str(task.reward.type) != "task_direction":
         raise ValueError("This experiment uses only task-direction reward.")
@@ -121,6 +129,11 @@ def validate_actor_critic_fpo_config(
         "num_processes": gpu_count,
         "adapter": {"rank": adapter.rank, "alpha": adapter.alpha},
         "fault": fault,
+        "video_aux": {
+            "enabled": video_enabled,
+            "weight": video_weight if video_enabled else 0.0,
+            "update_epochs": video_epochs,
+        },
     }
 
 
@@ -178,6 +191,7 @@ def run_actor_critic_fpo_training(cfg: DictConfig) -> None:
     )
     wrapped, optimizer = accelerator.prepare(wrapped, optimizer)
     ppo = cfg.outcome_fpo.ppo
+    video_aux = ppo.get("video_aux", {})
     trainer = ActorCriticFPOTrainer(
         scoring_model=wrapped,
         optimizer=optimizer,
@@ -196,6 +210,9 @@ def run_actor_critic_fpo_training(cfg: DictConfig) -> None:
         reward_scale=float(ppo.reward_scale),
         value_coefficient=float(ppo.value_coefficient),
         value_clip_range=float(ppo.value_clip_range),
+        video_aux_weight=float(video_aux.get("weight", 0.0)) if video_aux.get("enabled") else 0.0,
+        video_aux_update_epochs=int(video_aux.get("update_epochs", 1)),
+        checkpoint_video_blocks=bool(video_aux.get("checkpoint_blocks", True)),
     )
     if resume is not None:
         trainer.load_checkpoint(resume, config_hash=provenance["config_sha256"])

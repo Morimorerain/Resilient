@@ -8,6 +8,7 @@ import torch.nn.functional as F
 
 from resilient.outcome_fpo.policy import FastWAMFPOScoringModule
 from resilient.outcome_fpo.types import ActionConditioning
+from resilient.outcome_fpo.video_flow import realized_video_flow_loss
 
 
 class ConditionValueHead(nn.Module):
@@ -59,10 +60,27 @@ class ActorCriticFPOScoringModule(FastWAMFPOScoringModule):
     def forward(
         self,
         conditioning: ActionConditioning,
-        action: torch.Tensor,
-        noise: torch.Tensor,
-        timestep: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+        action: torch.Tensor | None = None,
+        noise: torch.Tensor | None = None,
+        timestep: torch.Tensor | None = None,
+        *,
+        objective: str = "actor_critic",
+        real_video_latent: torch.Tensor | None = None,
+        video_noise_seed: int | None = None,
+        checkpoint_video_blocks: bool = True,
+    ) -> tuple[torch.Tensor, torch.Tensor] | torch.Tensor:
+        if objective == "video_flow":
+            if real_video_latent is None or video_noise_seed is None:
+                raise ValueError("Video flow requires a real latent and perturbation seed.")
+            return realized_video_flow_loss(
+                self.fastwam,
+                conditioning,
+                real_video_latent,
+                seed=video_noise_seed,
+                checkpoint_blocks=checkpoint_video_blocks,
+            )
+        if objective != "actor_critic" or action is None or noise is None or timestep is None:
+            raise ValueError("Actor-critic scoring requires action, noise, and timestep.")
         cfm_loss = super().forward(conditioning, action, noise, timestep)
         value = self.value_head(
             conditioning.to(device=self.fastwam.device, dtype=self.fastwam.torch_dtype)

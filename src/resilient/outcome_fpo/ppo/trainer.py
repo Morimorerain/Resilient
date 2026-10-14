@@ -26,6 +26,9 @@ class ActorCriticFPOTrainer(OutcomeFPOTrainer):
         reward_scale: float,
         value_coefficient: float,
         value_clip_range: float,
+        video_aux_weight: float = 0.0,
+        video_aux_update_epochs: int = 1,
+        checkpoint_video_blocks: bool = True,
         **kwargs,
     ) -> None:
         super().__init__(minimum_reward_std=0.0, **kwargs)
@@ -37,10 +40,15 @@ class ActorCriticFPOTrainer(OutcomeFPOTrainer):
         self.reward_scale = float(reward_scale)
         self.value_coefficient = float(value_coefficient)
         self.value_clip_range = float(value_clip_range)
+        self.video_aux_weight = float(video_aux_weight)
+        self.video_aux_update_epochs = int(video_aux_update_epochs)
+        self.checkpoint_video_blocks = bool(checkpoint_video_blocks)
         if self.max_chunks_per_episode % self.minibatch_size:
             raise ValueError("max_chunks_per_episode must divide by minibatch_size.")
         if self.reward_scale <= 0 or self.value_coefficient < 0 or self.value_clip_range <= 0:
             raise ValueError("Invalid reward scale, value coefficient, or value clip range.")
+        if self.video_aux_weight < 0 or not 1 <= self.video_aux_update_epochs <= self.update_epochs:
+            raise ValueError("Invalid video auxiliary weight or update epochs.")
 
     def train_episode(self, episode: PPOEpisode) -> dict[str, float]:
         """Pad only optimizer work, never simulator experience, across uneven terminal episodes."""
@@ -71,11 +79,12 @@ class ActorCriticFPOTrainer(OutcomeFPOTrainer):
             "clip_fraction": 0.0,
             "approx_kl": 0.0,
             "grad_norm": 0.0,
+            "video_loss": 0.0,
         }
         self.scoring_model.train()
         # Every rank executes the same number of forwards/optimizer steps under DDP.
         # Padded indices repeat a real input but contribute exactly zero loss.
-        for _ in range(self.update_epochs):
+        for update_epoch in range(self.update_epochs):
             order = torch.randperm(active_count).tolist()
             order.extend([order[-1]] * (self.max_chunks_per_episode - active_count))
             for start in range(0, self.max_chunks_per_episode, self.minibatch_size):
@@ -120,6 +129,26 @@ class ActorCriticFPOTrainer(OutcomeFPOTrainer):
                             / float(self.minibatch_size)
                         )
                     self.accelerator.backward(loss)
+                    if self.video_aux_weight > 0 and update_epoch < self.video_aux_update_epochs:
+                        if item.real_video_latent is None or item.video_noise_seed is None:
+                            raise ValueError("Video auxiliary mode requires real video targets.")
+                        with self.accelerator.autocast():
+                            video_loss = self.scoring_model(
+                                item.conditioning,
+                                objective="video_flow",
+                                real_video_latent=item.real_video_latent,
+                                video_noise_seed=item.video_noise_seed,
+                                checkpoint_video_blocks=self.checkpoint_video_blocks,
+                            )
+                            scaled_video_loss = (
+                                active
+                                * self.video_aux_weight
+                                * video_loss
+                                / float(self.minibatch_size)
+                            )
+                        self.accelerator.backward(scaled_video_loss)
+                        if active:
+                            metrics["video_loss"] += float(video_loss.detach().item())
                     if active:
                         metrics["policy_loss"] += float(policy_loss.detach().item())
                         metrics["value_loss"] += float(value_loss.detach().item())
@@ -140,9 +169,17 @@ class ActorCriticFPOTrainer(OutcomeFPOTrainer):
         update_count = self.update_epochs * self.max_chunks_per_episode // self.minibatch_size
         return {
             **{
-                name: value / (float(update_count) if name == "grad_norm" else denominator)
+                name: value
+                / (
+                    float(update_count)
+                    if name == "grad_norm"
+                    else float(active_count * self.video_aux_update_epochs)
+                    if name == "video_loss" and self.video_aux_weight > 0
+                    else denominator
+                )
                 for name, value in metrics.items()
             },
+            "video_aux_weight": self.video_aux_weight,
             "reward_mean": float(rewards.mean().item()),
             "reward_raw_mean": sum(item.reward for item in steps) / active_count,
             "reward_raw_std": float(

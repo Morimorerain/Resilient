@@ -1133,6 +1133,62 @@ Git 忽略的运行目录是 `runs/two_stage_opsd/libero10_task7_e5_periodic_fre
 改为本轮目录，并指定不同的输出目录；与 GRPO 对比时必须使用同一组 50 个未见状态、10 步
 重规划，同时记录实际采到的 chunk 数，不仅比较 epoch 数。
 
+#### PPO 第二阶段可选的真实视频同步监督
+
+配置 `fastwam_libero10_task7_e5_direct_stage2_task_direction_ppo_immediate_video_10ep`
+继承上述单动作块 PPO 实验，仅开启 `outcome_fpo.ppo.video_aux`。既有 PPO 与组内相对 FPO
+配置均未开启该开关，原损失及采样路径保持不变。E5 主环境每个 chunk 已在动作步
+`0,4,...,32` 采集九帧对齐的双相机真实视频；计算 task-direction 奖励时，冻结的 Fast-WAM
+VAE 已编码该视频。训练复用其中**未模糊的完整真实视频** latent，而不是局部模糊的
+counterfactual latent；短期缓存为 detached CPU 张量。无需新增原始视频数据集或模型权重。
+
+每个有效 chunk 的 actor/critic 损失与视频损失依次反传，在同一次优化器更新前累积梯度。
+视频损失复用 Fast-WAM 的 shift=`5` 视频 flow scheduler、加噪真实 latent、
+`noise - real_latent` 目标、固定当前帧 latent、timestep 权重，以及**仅未来 latent slice**
+的 MSE；不调用完整 `training_loss()`，因此不会额外加入 action imitation loss。健康奖励
+Teacher、VAE、文本编码器与 Fast-WAM 基座继续冻结；只更新现有 Recovery LoRA 与训练专用
+critic。奖励仍然仅有 `task_direction`。两次 PPO 更新中，默认仅第一遍对每个有效 chunk
+执行一次视频监督（`video_aux.update_epochs: 1`）；actor/critic 仍更新两遍。分布式填充
+slot 的损失为零，但保持各 rank 前/反向次数一致。`ppo_updates_rank_XX.jsonl` 会记录未经
+权重缩放的 `video_loss` 和 `video_aux_weight`。
+
+初值 `video_aux.weight: 0.001` 只是**基于短测校准的起点**，并非已证实的最优权重。
+四个真实 E5 chunk（critic 刚初始化、尚未执行优化器更新）中，未加权视频项在 Video LoRA
+上的梯度范数约为 `0.20`、`0.27`、
+`0.27`、`3.87`，奖励 actor 对应约为 `0.0081`、`0.0113`、`0.0092`、`0.0047`。
+因此 `0.02` 在其中一段会让视频梯度达到奖励项约 16 倍；改为 `0.001` 后，该次已观测
+尖峰约为 0.83 倍，其余三段约为 2–3%。四段样本不足以确定最优 SR 权重，也不能保证不会
+出现更大尖峰。可修改为其他正数比较，设置 `enabled: false` 则恢复原 PPO 路径。
+`checkpoint_blocks: true` 以
+额外计算换取九帧 Video DiT 反传的显存降低。正式训练前必须检查单样本/分布式峰值显存、
+有限的 loss、Video LoRA 非零梯度及 activation checkpoint 前后的数值一致性。此前 0 卡
+与 HQ-SAM 共用时已接近 43/48 GiB，不能假定新损失一定放得下。发布版 Video DiT 的
+`action_conditioned=false`，故该辅助项学习的是当前策略诱导的 Fault 视频分布，
+**不是**针对任一候选动作的精确后果预测；视频 loss 下降不代表成功率必然提升。
+
+沿用已有环境和资产配置。以下示例使用四卡；执行前应按实际可用 GPU 修改卡号与 HQ-SAM
+所在卡，并为实验指定独立的队列与日志目录：
+
+```bash
+python scripts/resilient/train_outcome_fpo.py \
+  --config-name two_stage_opsd/fastwam_libero10_task7_e5_direct_stage2_task_direction_ppo_immediate_video_10ep \
+  outcome_fpo.validate_only=true
+export LIBERO_CONFIG_PATH="$PWD/AILOG/libero"
+export DIFFSYNTH_MODEL_BASE_PATH="$PWD/checkpoints"
+TRAIN_ENTRYPOINT=train_outcome_fpo.py FASTWAM_ENV="$PWD/AILOG/envs/resilient-fastwam-uv" \
+CONFIG_NAME=two_stage_opsd/fastwam_libero10_task7_e5_direct_stage2_task_direction_ppo_immediate_video_10ep \
+TRAIN_PORT=29531 QUEUE_DIR="$PWD/data/.cache/task_decoupling_rpc_samhq_e5_ppo_video" \
+LOG_DIR="$PWD/AILOG/processes/e5_ppo_video_10ep" \
+  bash scripts/resilient/run_task_direction_outcome_fpo.sh 0,1,2,3 0
+```
+
+默认输出在 Git 忽略的 `runs/two_stage_opsd/libero10_task7_e5_periodic_freeze_seed42/`
+`direct_stage2_task_direction_ppo_immediate_video_10ep/`。应与同一发布基座起点、E5、
+训练/验证状态划分、每轮 48 episode、随机种子及训练时长的无视频 PPO 对照；两者均在
+同一 50 个未见状态上按**10 步重规划**测评，并记录真实采集 chunk 数、PPO ratio/clip、
+显存峰值、视频 loss 与 SR。上文关于现有 ZeRO-2 梯度范数仅为诊断值的限制仍适用。
+本变更没有新增依赖或资产，不需要修改 requirements。
+
 ## Stage II 任务区域解耦审计
 
 可选的任务区域路径先把任务物体证据与机器人本体运动分离，再决定是否允许它影响 Stage II

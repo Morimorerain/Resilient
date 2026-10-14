@@ -36,6 +36,8 @@ class PPOTransition:
     old_value: float
     reward: float
     done: bool
+    real_video_latent: torch.Tensor | None = None
+    video_noise_seed: int | None = None
 
 
 @dataclass(frozen=True)
@@ -195,6 +197,21 @@ def collect_ppo_episode(
                     old_value=old_value,
                     reward=reward,
                     done=bool(future.success),
+                    real_video_latent=(
+                        residual.full_latent.detach().cpu()
+                        if bool(ppo.get("video_aux", {}).get("enabled", False))
+                        else None
+                    ),
+                    video_noise_seed=(
+                        _derive_seed(
+                            int(section.fpo.mc_seed),
+                            descriptor.sample_id,
+                            chunk_index,
+                            "video_flow",
+                        )
+                        if bool(ppo.get("video_aux", {}).get("enabled", False))
+                        else None
+                    ),
                 )
             )
             observation = future.observations[-1]
